@@ -136,7 +136,7 @@ Create a **universal** release with an available Developer ID identity:
 APP_IDENTITY='Developer ID Application: YOUR NAME (TEAMID)' Scripts/release.sh
 ```
 
-This produces `build/Splash Finish.app`, `dist/SplashFinish-0.1.0-universal.zip`, and `dist/SHA256SUMS`. The signing identity used by the installer is pinned to the project's Developer ID team; update `TEAM_ID` in `install.py` if the project changes hands. A build without notarization will not pass Gatekeeper on a downloaded file. For a distributable notarized build, configure a `notarytool` keychain profile and run:
+This produces `build/Splash Finish.app`, `dist/SplashFinish-<version>-universal.zip`, and `dist/SHA256SUMS`. The signing identity used by the installer is pinned to the project's Developer ID team; update `TEAM_ID` in `install.py` if the project changes hands. A build without notarization will not pass Gatekeeper on a downloaded file. For a distributable notarized build, configure a `notarytool` keychain profile and run:
 
 ```sh
 APP_IDENTITY='Developer ID Application: YOUR NAME (TEAMID)' \

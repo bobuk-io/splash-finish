@@ -95,7 +95,7 @@ private struct NotificationRow: View {
     }
 }
 
-struct PanelView: View {
+@MainActor struct PanelView: View {
     let model: AppModel
     let onOpen: (AgentEvent) -> Void
     let onSize: (CGSize) -> Void
