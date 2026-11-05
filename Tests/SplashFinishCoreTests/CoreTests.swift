@@ -161,6 +161,45 @@ final class FilesAndInstallerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: extensionURL.path))
         _ = try installer.run(install: false, agents: AgentKind.allCases)
     }
+    func testPiAgentAskDetectionAndRecommendations() throws {
+        XCTAssertFalse(installer.piAgentAskDetected())
+        let settings = home.appendingPathComponent(".pi/agent/settings.json")
+        let package = home.appendingPathComponent(".pi/agent/npm/node_modules/pi-agent-ask/package.json")
+        try SafeFiles.write(Data("{\"packages\":[\"npm:pi-agent-ask\"]}".utf8), to: settings)
+        XCTAssertFalse(installer.piAgentAskDetected(), "A configured but missing package is not installed")
+        try SafeFiles.write(Data("{\"name\":\"pi-agent-ask\",\"version\":\"2.0.2\"}".utf8), to: package)
+        XCTAssertTrue(installer.piAgentAskDetected())
+        XCTAssertTrue(installer.inspect(inbox: Inbox()).last!.piAskDetected)
+        XCTAssertTrue(try installer.run(install: true, agents: [.pi]).joined().contains("rich questions enabled"))
+        XCTAssertTrue(installer.inspect(inbox: Inbox()).last!.richQuestionsEnabled)
+        try SafeFiles.write(Data("{\"packages\":[{\"source\":\"npm:pi-agent-ask\",\"extensions\":[]}]}".utf8), to: settings)
+        XCTAssertFalse(installer.piAgentAskDetected(), "A disabled extension must not be offered as available")
+        XCTAssertTrue(try installer.run(install: true, agents: [.pi]).joined().contains("pi install npm:pi-agent-ask"))
+    }
+    func testRichPiCanBeEnabledPreservedAndDisabled() throws {
+        let file = home.appendingPathComponent(".pi/agent/extensions/splash-finish-questions.ts")
+        _ = try installer.run(install: true, agents: [.pi])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        _ = try installer.run(install: true, agents: [.pi], richQuestions: true)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertFalse(try String(contentsOf: file, encoding: .utf8).contains("__EXECUTABLE_JSON__"))
+        XCTAssertEqual(installer.inspect(inbox: Inbox()).last?.richQuestionsEnabled, true)
+        _ = try installer.run(install: true, agents: [.pi])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path), "CLI reinstall preserves a project-local opt-in")
+        _ = try installer.run(install: true, agents: [.pi], richQuestions: false)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertEqual(installer.inspect(inbox: Inbox()).last?.richQuestionsEnabled, false)
+        _ = try installer.run(install: true, agents: [.pi], richQuestions: true)
+        _ = try installer.run(install: false, agents: [.pi])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+    }
+    func testRichPiFileOwnershipIsProtected() throws {
+        let file = home.appendingPathComponent(".pi/agent/extensions/splash-finish-questions.ts")
+        try SafeFiles.write(Data("user-owned extension".utf8), to: file)
+        XCTAssertThrowsError(try installer.run(install: true, agents: [.pi]))
+        XCTAssertThrowsError(try installer.run(install: false, agents: [.pi]))
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "user-owned extension")
+    }
     func testDoctorDetectsInstallOutdatedAndLastEvent() throws {
         var inbox = Inbox()
         XCTAssertEqual(installer.inspect(inbox: inbox).map(\.state), ["not installed", "not installed", "not installed"])

@@ -5,12 +5,14 @@ import Sparkle
 import SplashFinishCore
 
 private final class SplashPanel: NSPanel {
-    var onKeyAction: ((PanelKeyAction) -> Void)?
+    var onKeyAction: ((PanelKeyAction) -> Bool)?
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
     override func sendEvent(_ event: NSEvent) {
         guard event.type == .keyDown, isKeyWindow else { super.sendEvent(event); return }
+        // Text editing must never trigger inbox-wide shortcuts or navigation.
+        if firstResponder is NSTextView { super.sendEvent(event); return }
         let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
         // Swallow repeats of destructive or one-shot shortcuts rather than passing
         // them to another responder; arrow-key repeats still navigate normally.
@@ -18,7 +20,8 @@ private final class SplashPanel: NSPanel {
         if let action = PanelKeyAction.from(keyCode: event.keyCode,
                                             hasCommandModifiers: !modifiers.isEmpty,
                                             isRepeat: event.isARepeat) {
-            onKeyAction?(action)
+            if onKeyAction?(action) == true { return }
+            super.sendEvent(event)
             return
         }
         super.sendEvent(event)
@@ -50,7 +53,7 @@ private final class SplashPanel: NSPanel {
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = false
-        panel.onKeyAction = { [weak self] action in self?.handleKey(action) }
+        panel.onKeyAction = { [weak self] action in self?.handleKey(action) ?? false }
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
@@ -100,6 +103,9 @@ private final class SplashPanel: NSPanel {
         switch url.host {
         case "event":
             do { model.receive(try DeepLink.parse(url)) } catch { model.report(error) }
+        case "question":
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            if items.count == 1, items[0].name == "id", let id = items[0].value { model.openQuestion(id: id) }
         case "show": model.show()
         case "snooze": model.snooze()
         case "clear": model.clear()
@@ -146,7 +152,8 @@ private final class SplashPanel: NSPanel {
             NSAccessibility.post(element: panel as Any, notification: .layoutChanged)
         }
     }
-    private func handleKey(_ action: PanelKeyAction) {
+    private func handleKey(_ action: PanelKeyAction) -> Bool {
+        if action == .open, let event = model.selectedEvent, model.questionID(for: event) != nil { return false }
         switch action {
         case .snooze: model.snooze()
         case .clearAll: model.clear()
@@ -155,6 +162,7 @@ private final class SplashPanel: NSPanel {
         case .open:
             if let event = model.selectedEvent { SourceNavigator.open(event, model: model) }
         }
+        return true
     }
     private func makeMenu() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -243,10 +251,21 @@ private final class SplashPanel: NSPanel {
         alert.informativeText = "This updates your Claude Code and Codex hooks, their Splash Finish skills, and the pi extension. Existing unrelated settings are kept. Codex requires hook trust via /hooks."
         alert.addButton(withTitle: install ? "Install" : "Remove")
         alert.addButton(withTitle: "Cancel")
+        let piAsk = (try? CLI.integrationInstaller().piAgentAskDetected()) ?? false
+        let richQuestions = NSButton(checkboxWithTitle: "Enable rich pi-agent-ask questions", target: nil, action: nil)
+        if install {
+            if let statuses = try? CLI.integrationInstaller().inspect(inbox: model.inbox),
+               let pi = statuses.first(where: { $0.agent == .pi }),
+               pi.richQuestionsEnabled || (pi.state == "not installed" && piAsk) { richQuestions.state = .on }
+            richQuestions.toolTip = "Uses pi-agent-ask's public integration events."
+            if !piAsk { alert.informativeText += "\n\npi-agent-ask was not detected globally. Install it with: pi install npm:pi-agent-ask. Project-local installations may still work." }
+            alert.accessoryView = richQuestions
+        }
         NSApp.activate()
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
-            let messages = try CLI.integrationInstaller().run(install: install, agents: AgentKind.allCases)
+            let messages = try CLI.integrationInstaller().run(install: install, agents: AgentKind.allCases,
+                                                               richQuestions: install && richQuestions.state == .on)
             let result = NSAlert(); result.messageText = "Splash Finish"; result.informativeText = messages.joined(separator: "\n"); result.runModal()
         } catch { model.report(error); model.show() }
     }

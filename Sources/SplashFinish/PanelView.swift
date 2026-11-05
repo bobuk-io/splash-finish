@@ -125,9 +125,14 @@ private struct NotificationRow: View {
             }.foregroundStyle(color).padding(.horizontal, 4)
             VStack(spacing: 10) {
                 ForEach(items, id: \.key) { event in
-                    NotificationRow(event: event, onOpen: { onOpen(event) }, onDismiss: { model.dismiss(event) },
-                                    selected: model.selectedKey == event.key)
-                        .id(event.key)
+                    if let id = model.questionID(for: event), let question = model.questions[id] {
+                        PiQuestionView(question: question, submit: { model.answerQuestion(id: id, value: $0) },
+                                       usePi: { model.usePi(id: id) }, submitting: model.submittingQuestions.contains(id),
+                                       error: model.questionErrors[id]).id(event.key)
+                    } else {
+                        NotificationRow(event: event, onOpen: { onOpen(event) }, onDismiss: { model.dismiss(event) },
+                                        selected: model.selectedKey == event.key).id(event.key)
+                    }
                 }
             }
         }
@@ -180,7 +185,7 @@ private struct NotificationRow: View {
                     Text("Clear all").font(.system(size: 12, weight: .medium))
                         .padding(.horizontal, 12).frame(height: 33)
                 }.buttonStyle(QuietButtonStyle()).keyboardShortcut("w", modifiers: .command)
-                    .help("Clear all notifications and hide · Backspace or ⌘W")
+                    .help("Clear notifications; pending questions remain · Backspace or ⌘W")
             }.padding(.top, 17)
             Text(model.message ?? "Snooze for 15 minutes or until the next update")
                 .font(.system(size: 10)).foregroundStyle(model.message == nil ? muted : Color(hex: 0xF0C37A))

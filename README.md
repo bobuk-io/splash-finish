@@ -94,6 +94,16 @@ Open **Integrations…** in the menu bar or run `splash-finish doctor` to inspec
 
 The installer preserves unrelated hooks/settings, rejects unmanaged files and symlinked configuration paths, and writes a uniquely named backup before changing an existing JSON config. Reinstall updates only Splash Finish entries. Config locations honor `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and `PI_CODING_AGENT_DIR`. Removal does not delete the app, unrelated hooks, or configuration backups. Existing pi sessions need `/reload` after either operation.
 
+### Rich pi questions
+
+Install [pi-agent-ask](https://github.com/alexshpunt/pi-agent-ask) separately with `pi install npm:pi-agent-ask`. Do not install it alongside another provider of `ask_user`. Splash Finish checks the globally configured package and recommends installation if it is not detected; project-local and manually loaded packages cannot always be detected.
+
+Run `splash-finish install-skills --agent pi` to install the integration. Rich questions are enabled automatically when pi-agent-ask is detected globally; an already-enabled integration is preserved on reinstall. Use the checkbox in **Integrations…** to enable or disable rich questions explicitly, including for project-local installations. Run `/reload` in existing pi sessions after changes. Splash Finish never installs or removes pi-agent-ask itself.
+
+The adapter uses pi-agent-ask's documented versioned lifecycle and submit events, without patching its UI. It supports multiple questions, single/multiple choices, custom answers, question and option notes. Submit waits for pi's acknowledgement; if the terminal answers first, the card closes. **Answer in pi** closes the card without answering it; Snooze preserves it; Clear all keeps pending questions. If the app is unavailable or a form is unsupported, the original pi interface remains available.
+
+Question text and answers travel over a per-request local Unix socket in a user-private directory, not in the deep link or persisted inbox. Other processes running as your user are not a security boundary. A newer or older pi-agent-ask version may change its event contract; version 2.0.2 is the tested baseline.
+
 ## 🔒 Local by default
 
 - No accounts, analytics, or servers operated by the app. Sparkle checks the public GitHub update feed, and the **installer** contacts GitHub.
@@ -117,6 +127,7 @@ Quit Splash Finish from its menu. Remove `~/Applications/Splash Finish.app` and 
 swift test
 python3 -m unittest discover -s Tests -v
 node Tests/pi-extension.test.mjs       # Node 22.18+ for TypeScript stripping
+node Tests/pi-questions.test.mjs
 Scripts/compile_and_run.sh --test      # ad-hoc local build
 # With an active macOS desktop and no existing Splash Finish process:
 SPLASH_FINISH_GUI_TESTS=1 python3 -m unittest discover -s Tests -p test_app_smoke.py -v

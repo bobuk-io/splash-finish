@@ -10,6 +10,8 @@ public struct IntegrationStatus: Identifiable, Sendable {
     public var state: String
     public var detail: String
     public var lastEvent: Date?
+    public var richQuestionsEnabled: Bool = false
+    public var piAskDetected: Bool = false
 }
 
 public struct IntegrationInstaller {
@@ -33,6 +35,26 @@ public struct IntegrationInstaller {
         case .pi: key = "PI_CODING_AGENT_DIR"; fallback = ".pi/agent"
         }
         return environment[key].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? home.appendingPathComponent(fallback)
+    }
+    /// Detect a configured, installed global package; project-local extensions may still exist.
+    public func piAgentAskDetected() -> Bool {
+        let piRoot = root(.pi)
+        guard let settings = try? readObject(piRoot.appendingPathComponent("settings.json")),
+              let packages = settings["packages"] as? [Any] else { return false }
+        for entry in packages {
+            let object = entry as? [String: Any]
+            let source = (entry as? String) ?? (object?["source"] as? String) ?? ""
+            if let extensions = object?["extensions"] as? [String], extensions.isEmpty { continue }
+            let packageURL: URL
+            if source == "npm:pi-agent-ask" || source.hasPrefix("npm:pi-agent-ask@") {
+                packageURL = piRoot.appendingPathComponent("npm/node_modules/pi-agent-ask/package.json")
+            } else if source.contains("github.com/alexshpunt/pi-agent-ask") {
+                packageURL = piRoot.appendingPathComponent("git/github.com/alexshpunt/pi-agent-ask/package.json")
+            } else { continue }
+            guard let package = try? readObject(packageURL), package["name"] as? String == "pi-agent-ask" else { continue }
+            return true
+        }
+        return false
     }
     private func quote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
     private func owned(_ hook: [String: Any]) -> Bool {
@@ -114,6 +136,12 @@ public struct IntegrationInstaller {
         }
         return files
     }
+    private func richPiFile() throws -> (URL, Data) {
+        let template = try String(contentsOf: resources.appendingPathComponent("pi-questions.ts"), encoding: .utf8)
+        let encoded = String(data: try JSONEncoder().encode(executable), encoding: .utf8)!
+        return (root(.pi).appendingPathComponent("extensions/splash-finish-questions.ts"),
+                Data(template.replacingOccurrences(of: "__EXECUTABLE_JSON__", with: encoded).utf8))
+    }
     private func checkOwnership(_ url: URL) throws {
         try SafeFiles.check(url)
         if FileManager.default.fileExists(atPath: url.path) {
@@ -126,6 +154,7 @@ public struct IntegrationInstaller {
         AgentKind.allCases.map { agent in
             let display = agent == .claude ? "claude code" : agent.rawValue
             let last = inbox.lastEvents?[display]
+            let piAsk = agent == .pi && piAgentAskDetected()
             do {
                 let files = try managedFiles(agent)
                 let existing = files.filter { FileManager.default.fileExists(atPath: $0.0.path) }
@@ -159,31 +188,48 @@ public struct IntegrationInstaller {
                     return IntegrationStatus(agent: agent, state: "not installed", detail: "Install the integration to receive events.", lastEvent: last)
                 }
                 if agent == .pi && existing.isEmpty {
-                    return IntegrationStatus(agent: agent, state: "not installed", detail: "Install the integration to receive events.", lastEvent: last)
+                    return IntegrationStatus(agent: agent, state: "not installed", detail: piAsk ? "pi-agent-ask detected. Enable rich questions when installing." : "pi-agent-ask not detected globally. Install with: pi install npm:pi-agent-ask", lastEvent: last, piAskDetected: piAsk)
                 }
+                let richFile = try agent == .pi ? richPiFile() : nil
+                let richEnabled = richFile.map { FileManager.default.fileExists(atPath: $0.0.path) } == true
                 let filesCurrent = existing.count == files.count && files.allSatisfy { (try? Data(contentsOf: $0.0)) == $0.1 }
                 if !hooksPresent || existing.count != files.count {
-                    return IntegrationStatus(agent: agent, state: "incomplete", detail: "Some managed files or hooks are missing. Reinstall to repair.", lastEvent: last)
+                    return IntegrationStatus(agent: agent, state: "incomplete", detail: "Some managed files or hooks are missing. Reinstall to repair.", lastEvent: last, richQuestionsEnabled: richEnabled, piAskDetected: piAsk)
                 }
                 if !filesCurrent || !hooksCurrent {
-                    return IntegrationStatus(agent: agent, state: "update available", detail: "Managed files differ from this app. Reinstall to update.", lastEvent: last)
+                    return IntegrationStatus(agent: agent, state: "update available", detail: "Managed files differ from this app. Reinstall to update.", lastEvent: last, richQuestionsEnabled: richEnabled, piAskDetected: piAsk)
+                }
+                if let richFile, FileManager.default.fileExists(atPath: richFile.0.path) {
+                    try checkOwnership(richFile.0)
+                    if (try? Data(contentsOf: richFile.0)) != richFile.1 {
+                        return IntegrationStatus(agent: agent, state: "update available", detail: "Rich pi question integration differs from this app. Reinstall to update.", lastEvent: last, richQuestionsEnabled: true, piAskDetected: piAsk)
+                    }
                 }
                 let detail = agent == .codex ? "Installed. Hook trust is not detectable: review /hooks in Codex." :
-                    agent == .pi ? "Installed. Run /reload in existing pi sessions." : "Installed. Restart Claude Code to load hooks."
-                return IntegrationStatus(agent: agent, state: "installed", detail: detail, lastEvent: last)
+                    agent == .pi ? "Installed. \(piAsk ? (richEnabled ? "Rich questions enabled." : "pi-agent-ask detected; enable rich questions below.") : "pi-agent-ask not detected globally; install with: pi install npm:pi-agent-ask") Run /reload in existing pi sessions." : "Installed. Restart Claude Code to load hooks."
+                return IntegrationStatus(agent: agent, state: "installed", detail: detail, lastEvent: last, richQuestionsEnabled: richEnabled, piAskDetected: piAsk)
             } catch {
                 return IntegrationStatus(agent: agent, state: "error", detail: error.localizedDescription, lastEvent: last)
             }
         }
     }
-    public func run(install: Bool, agents: [AgentKind]) throws -> [String] {
+    public func run(install: Bool, agents: [AgentKind], richQuestions: Bool? = nil) throws -> [String] {
         let lockRoot = environment["SPLASH_FINISH_HOME"].map { URL(fileURLWithPath: $0, isDirectory: true) }
             ?? home.appendingPathComponent("Library/Application Support/Splash Finish")
         let lock = try FileLock(url: lockRoot.appendingPathComponent("skills.lock"))
         return try withExtendedLifetime(lock) {
+            // Preserve explicitly enabled project-local integrations on CLI reinstall.
+            let existingRich = try agents.contains(.pi) && FileManager.default.fileExists(atPath: richPiFile().0.path)
+            let enableRich = richQuestions ?? (piAgentAskDetected() || existingRich)
             // Validate all destinations before editing the first agent.
             let planned = try agents.map { agent -> (AgentKind, [(URL, Data)]) in
-                let files = try managedFiles(agent)
+                var files = try managedFiles(agent)
+                if agent == .pi {
+                    let optional = try richPiFile()
+                    // Always preflight the optional file, including when disabling it.
+                    try checkOwnership(optional.0)
+                    if enableRich || !install { files.append(optional) }
+                }
                 for (url, _) in files { try checkOwnership(url) }
                 if agent != .pi { try patch(agent, install: install, dryRun: true) }
                 return (agent, files)
@@ -191,6 +237,10 @@ public struct IntegrationInstaller {
             var messages = [String]()
             for (agent, files) in planned {
                 if install {
+                    if agent == .pi && !enableRich {
+                        let optional = try richPiFile().0
+                        if FileManager.default.fileExists(atPath: optional.path) { try FileManager.default.removeItem(at: optional) }
+                    }
                     for (url, data) in files { try SafeFiles.write(data, to: url) }
                     if agent != .pi { try patch(agent, install: true) }
                 } else {
@@ -206,7 +256,14 @@ public struct IntegrationInstaller {
                 messages.append("\(install ? "Installed" : "Removed") \(agent.rawValue) skill\(agent == .pi ? " and extension" : " and hooks")")
             }
             if install && agents.contains(.codex) { messages.append("Codex: review and trust the new hooks using /hooks. No security settings were changed.") }
-            if install && agents.contains(.pi) { messages.append("Pi: run /reload in existing sessions.") }
+            if install && agents.contains(.pi) {
+                if piAgentAskDetected() {
+                    messages.append(enableRich ? "Pi: rich questions enabled for pi-agent-ask." : "Pi: pi-agent-ask detected. Enable rich questions in Integrations.")
+                } else {
+                    messages.append("Pi: pi-agent-ask not detected globally. Install it with: pi install npm:pi-agent-ask (project-local installations may still work).")
+                }
+                messages.append("Pi: run /reload in existing sessions.")
+            }
             return messages
         }
     }

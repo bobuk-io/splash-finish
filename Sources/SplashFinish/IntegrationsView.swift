@@ -5,6 +5,7 @@ import SplashFinishCore
     let model: AppModel
     @State private var statuses: [IntegrationStatus] = []
     @State private var message: String?
+    @State private var richPi = false
 
     private func refresh() {
         do { statuses = try CLI.integrationInstaller().inspect(inbox: model.inbox) }
@@ -12,7 +13,7 @@ import SplashFinishCore
     }
     private func install(_ agent: AgentKind) {
         do {
-            let result = try CLI.integrationInstaller().run(install: true, agents: [agent])
+            let result = try CLI.integrationInstaller().run(install: true, agents: [agent], richQuestions: agent == .pi ? richPi : nil)
             message = result.joined(separator: "\n")
             refresh()
         } catch { message = error.localizedDescription }
@@ -35,6 +36,11 @@ import SplashFinishCore
                             Text(status.state.capitalized).font(.caption).foregroundStyle(.secondary)
                         }
                         Text(status.detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        if status.agent == .pi {
+                            Toggle("Answer pi-agent-ask questions here", isOn: $richPi).toggleStyle(.checkbox)
+                            Text(status.piAskDetected ? "pi-agent-ask detected. Apply changes with Reinstall." : "Not detected globally. Run: pi install npm:pi-agent-ask (project-local installs may still work).")
+                                .font(.caption).foregroundStyle(.secondary).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                        }
                         if let date = status.lastEvent {
                             Text("Last event: \(date.formatted(date: .abbreviated, time: .shortened))")
                                 .font(.caption).foregroundStyle(.secondary)
@@ -56,6 +62,11 @@ import SplashFinishCore
                 Button("Refresh", action: refresh).keyboardShortcut("r", modifiers: .command)
             }
         }.padding(24).frame(minWidth: 520, minHeight: 400)
-            .onAppear(perform: refresh)
+            .onAppear {
+                refresh()
+                if let pi = statuses.first(where: { $0.agent == .pi }) {
+                    richPi = pi.richQuestionsEnabled || (pi.state == "not installed" && pi.piAskDetected)
+                }
+            }
     }
 }

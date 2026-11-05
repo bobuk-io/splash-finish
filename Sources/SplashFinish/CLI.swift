@@ -2,7 +2,7 @@ import AppKit
 import SplashFinishCore
 
 @MainActor enum CLI {
-    static let version = "0.2.1"
+    static let version = "0.3.0"
     static let help = """
     Splash Finish \(version) — a landing strip for your AI agents
 
@@ -118,6 +118,9 @@ import SplashFinishCore
                 for item in statuses {
                     print("\(item.agent.rawValue): \(item.state)")
                     print("  \(item.detail)")
+                    if item.agent == .pi {
+                        print(item.piAskDetected ? "  pi-agent-ask detected; run install-skills to enable rich questions." : "  pi-agent-ask not detected globally; install: pi install npm:pi-agent-ask (project-local installs may still work).")
+                    }
                     print("  Last event: \(item.lastEvent.map { formatter.string(from: $0) } ?? "none recorded")")
                 }
             case "notify":

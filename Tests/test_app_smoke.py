@@ -5,7 +5,11 @@ real agent configurations. Requires an active macOS graphical session.
 """
 import json
 import os
+import socket
+import stat
 import subprocess
+import threading
+import uuid
 import tempfile
 import time
 import unittest
@@ -58,6 +62,38 @@ class AppSmokeTests(unittest.TestCase):
                 return state
             time.sleep(0.05)
         self.fail(f"State did not converge: {state}")
+
+    def test_rich_question_connection_and_clear(self):
+        directory = Path('/tmp') / f'sf-{os.getuid()}'
+        directory.mkdir(mode=0o700, exist_ok=True)
+        self.assertEqual(directory.lstat().st_uid, os.getuid())
+        self.assertEqual(stat.S_IMODE(directory.lstat().st_mode) & 0o077, 0)
+        request_id = uuid.uuid4().hex
+        path = directory / f'{request_id}.sock'
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(server.close)
+        self.addCleanup(lambda: path.unlink(missing_ok=True))
+        server.bind(str(path)); server.listen(1); server.settimeout(6)
+        question = {'questions': [{'id': 'q1', 'label': 'First', 'prompt': 'Synthetic private question', 'type': 'single',
+                                   'options': [{'value': 'one', 'label': 'One'}, {'value': 'two', 'label': 'Two'}]}],
+                    'project': 'test', 'session': 'test-session'}
+        connected = threading.Event()
+        release = threading.Event()
+        def serve():
+            with server.accept()[0] as conn:
+                conn.sendall((json.dumps(question) + '\n').encode())
+                connected.set(); release.wait(8)
+                conn.sendall(b'{"type":"closed"}\n')  # terminal-answer / shutdown marker
+        thread = threading.Thread(target=serve, daemon=True); thread.start()
+        self.addCleanup(release.set)
+        subprocess.run(['/usr/bin/open', '-g', '-a', str(APP.parents[2]), f'splash-finish://question?id={request_id}'], check=True, timeout=5)
+        self.assertTrue(connected.wait(6), 'App did not connect to the local question socket')
+        state = self.wait_for(lambda s: any(x['task'] == f'question-{request_id}' for x in s['items']))
+        self.assertNotIn('Synthetic private question', json.dumps(state))
+        self.run_cli('clear')
+        self.wait_for(lambda s: any(x['task'] == f'question-{request_id}' for x in s['items']))
+        release.set(); thread.join(5)
+        self.wait_for(lambda s: all(x['task'] != f'question-{request_id}' for x in s['items']))
 
     def test_delivery_snooze_and_hook_lifecycle(self):
         self.run_cli("notify", "--agent", "Codex", "--task", "one", "--title", "First task")
