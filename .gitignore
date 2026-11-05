@@ -1,0 +1,10 @@
+.build/
+build/
+dist/
+*.app/
+.DS_Store
+.swiftpm/
+# Local design exploration is deliberately not part of the source repository.
+/design/
+__pycache__/
+*.pyc

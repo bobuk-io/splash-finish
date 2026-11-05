@@ -1,0 +1,25 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Swift tests
+        run: swift test
+      - name: Installer tests
+        run: python3 -m unittest discover -s Tests -v
+      - name: Pi extension lifecycle
+        run: node Tests/pi-extension.test.mjs
+      - name: Build universal app
+        run: SIGNING_MODE=adhoc ARCHES='arm64 x86_64' Scripts/package_app.sh release
+      - name: Verify app and architectures
+        run: |
+          codesign --verify --deep --strict 'build/Splash Finish.app'
+          lipo 'build/Splash Finish.app/Contents/MacOS/SplashFinish' -verify_arch arm64 x86_64
