@@ -37,7 +37,7 @@ The three bars in your menu bar are Splash Finish. One floating panel is shared 
 - **×** dismisses one notification. **Clear all** clears the list and hides the panel.
 - **Snooze** hides the panel for 15 minutes or until a genuinely new event arrives, whichever comes first. The inbox is retained, including across app restarts.
 - Click a row to return to its source when possible. A supplied session link is preferred; WezTerm pane IDs are captured when available. If exact navigation fails, Splash Finish activates the originating app. Other terminals do not guarantee the original tab or window can be selected.
-- Use the menu bar to reopen the inbox, send a test notification, install integrations, or enable **Start at Login**. `Esc` snoozes; `⌘W` clears all when the panel has keyboard focus.
+- Use the menu bar to reopen the inbox, send a test notification, install integrations, or enable **Start at Login**. When the panel appears, it takes keyboard focus: `Esc` snoozes, `Backspace` (or `⌘W`) clears all, `↑` / `↓` select a notification, and `Return` opens its source. A new notification in an already-visible panel does not steal focus back if you switched away.
 
 ```sh
 splash-finish show

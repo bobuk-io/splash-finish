@@ -5,6 +5,7 @@ import SplashFinishCore
 
 @MainActor @Observable final class AppModel {
     private(set) var inbox = Inbox()
+    private(set) var selection = KeyboardSelection()
     var message: String?
     var maxListHeight: CGFloat = 420
     @ObservationIgnored var onChange: ((Bool) -> Void)?
@@ -24,21 +25,33 @@ import SplashFinishCore
                                      to: AppPaths.state.appendingPathExtension("unreadable-\(UUID().uuidString)"))
             }
         }
+        selection.reconcile(keys: orderedKeys)
         scheduleWake()
     }
     var items: [AgentEvent] { inbox.items }
     var attention: [AgentEvent] { inbox.attention }
     var completed: [AgentEvent] { inbox.completed }
+    private var orderedKeys: [String] { (attention + completed).map(\.key) }
+    var selectedKey: String? { selection.key }
+    var selectedEvent: AgentEvent? { (attention + completed).first { $0.key == selection.key } }
+    func moveSelection(_ direction: Int) { selection.move(direction, keys: orderedKeys) }
     var isSnoozed: Bool { inbox.snoozedUntil.map { $0 > Date() } ?? false }
 
     func receive(_ event: AgentEvent) {
         do {
             let reveal = try inbox.receive(event)
+            selection.reconcile(keys: orderedKeys)
             persist(); scheduleWake(); onChange?(reveal)
         } catch { report(error) }
     }
-    func dismiss(_ event: AgentEvent) { inbox.dismiss(key: event.key); persist(); scheduleWake(); onChange?(false) }
-    func clear() { inbox.clear(); persist(); scheduleWake(); onChange?(false) }
+    func dismiss(_ event: AgentEvent) {
+        inbox.dismiss(key: event.key); selection.reconcile(keys: orderedKeys)
+        persist(); scheduleWake(); onChange?(false)
+    }
+    func clear() {
+        inbox.clear(); selection.reconcile(keys: orderedKeys)
+        persist(); scheduleWake(); onChange?(false)
+    }
     func snooze() { inbox.snooze(); persist(); scheduleWake(); onChange?(false) }
     func show() { inbox.reveal(); persist(); scheduleWake(); onChange?(true) }
     func report(_ error: Error) {

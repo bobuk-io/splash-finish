@@ -5,8 +5,24 @@ import Sparkle
 import SplashFinishCore
 
 private final class SplashPanel: NSPanel {
+    var onKeyAction: ((PanelKeyAction) -> Void)?
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func sendEvent(_ event: NSEvent) {
+        guard event.type == .keyDown, isKeyWindow else { super.sendEvent(event); return }
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        // Swallow repeats of destructive or one-shot shortcuts rather than passing
+        // them to another responder; arrow-key repeats still navigate normally.
+        if modifiers.isEmpty, event.isARepeat, [UInt16(53), 51, 36, 76].contains(event.keyCode) { return }
+        if let action = PanelKeyAction.from(keyCode: event.keyCode,
+                                            hasCommandModifiers: !modifiers.isEmpty,
+                                            isRepeat: event.isARepeat) {
+            onKeyAction?(action)
+            return
+        }
+        super.sendEvent(event)
+    }
 }
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -33,7 +49,8 @@ private final class SplashPanel: NSPanel {
         panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
-        panel.becomesKeyOnlyIfNeeded = true
+        panel.becomesKeyOnlyIfNeeded = false
+        panel.onKeyAction = { [weak self] action in self?.handleKey(action) }
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
@@ -116,10 +133,27 @@ private final class SplashPanel: NSPanel {
         statusItem?.button?.title = model.items.isEmpty ? "" : " \(model.items.count)"
         if model.isSnoozed || (!reveal && model.items.isEmpty) { panel.orderOut(nil) }
         else if reveal {
-            if !panel.isVisible { positionPanel() }
-            // Do not activate the app or take the keyboard away from the user's work.
-            panel.orderFrontRegardless()
+            if !panel.isVisible {
+                positionPanel()
+                // A newly presented panel takes keyboard focus. Keep it a
+                // nonactivating panel so hiding it returns to the previous app.
+                panel.makeKeyAndOrderFront(nil)
+            } else {
+                // A new notification in an already visible panel must not steal
+                // focus back from an app the user deliberately switched to.
+                panel.orderFrontRegardless()
+            }
             NSAccessibility.post(element: panel as Any, notification: .layoutChanged)
+        }
+    }
+    private func handleKey(_ action: PanelKeyAction) {
+        switch action {
+        case .snooze: model.snooze()
+        case .clearAll: model.clear()
+        case .previous: model.moveSelection(-1)
+        case .next: model.moveSelection(1)
+        case .open:
+            if let event = model.selectedEvent { SourceNavigator.open(event, model: model) }
         }
     }
     private func makeMenu() {

@@ -33,6 +33,7 @@ private struct NotificationRow: View {
     let event: AgentEvent
     let onOpen: () -> Void
     let onDismiss: () -> Void
+    let selected: Bool
     @State private var hovered = false
     @State private var dismissHovered = false
     private let muted = Color(hex: 0xA4AFB3)
@@ -94,7 +95,9 @@ private struct NotificationRow: View {
                 .help("Dismiss notification")
                 .accessibilityLabel("Dismiss \(event.agent): \(event.title)")
         }.padding(.horizontal, 4)
-            .background(.white.opacity(hovered ? 0.025 : 0), in: .rect(cornerRadius: 6))
+            .background(.white.opacity(selected ? 0.09 : hovered ? 0.025 : 0), in: .rect(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(selected ? 0.17 : 0)))
+            .accessibilityAddTraits(selected ? .isSelected : [])
             .contextMenu {
                 Button("Open Source", action: onOpen)
                 Button("Dismiss Notification", action: onDismiss)
@@ -122,7 +125,9 @@ private struct NotificationRow: View {
             }.foregroundStyle(color).padding(.horizontal, 4)
             VStack(spacing: 10) {
                 ForEach(items, id: \.key) { event in
-                    NotificationRow(event: event, onOpen: { onOpen(event) }, onDismiss: { model.dismiss(event) })
+                    NotificationRow(event: event, onOpen: { onOpen(event) }, onDismiss: { model.dismiss(event) },
+                                    selected: model.selectedKey == event.key)
+                        .id(event.key)
                 }
             }
         }
@@ -144,9 +149,14 @@ private struct NotificationRow: View {
             Text(subtitle).font(.system(size: 12)).foregroundStyle(muted).padding(.top, 7)
             if !model.items.isEmpty {
                 // viewThatFits keeps a short inbox intrinsically sized; only long lists scroll.
-                ViewThatFits(in: .vertical) {
-                    groups.fixedSize(horizontal: false, vertical: true)
-                    ScrollView { groups }.scrollIndicators(.automatic)
+                ScrollViewReader { proxy in
+                    ViewThatFits(in: .vertical) {
+                        groups.fixedSize(horizontal: false, vertical: true)
+                        ScrollView { groups }.scrollIndicators(.automatic)
+                    }
+                    .onChange(of: model.selectedKey) { _, key in
+                        if let key { proxy.scrollTo(key, anchor: .center) }
+                    }
                 }.frame(maxHeight: model.maxListHeight).padding(.top, 22)
             } else {
                 HStack(spacing: 9) {
@@ -170,7 +180,7 @@ private struct NotificationRow: View {
                     Text("Clear all").font(.system(size: 12, weight: .medium))
                         .padding(.horizontal, 12).frame(height: 33)
                 }.buttonStyle(QuietButtonStyle()).keyboardShortcut("w", modifiers: .command)
-                    .help("Clear all notifications and hide · ⌘W")
+                    .help("Clear all notifications and hide · Backspace or ⌘W")
             }.padding(.top, 17)
             Text(model.message ?? "Snooze for 15 minutes or until the next update")
                 .font(.system(size: 10)).foregroundStyle(model.message == nil ? muted : Color(hex: 0xF0C37A))

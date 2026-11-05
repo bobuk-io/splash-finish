@@ -2,7 +2,7 @@ import AppKit
 import SplashFinishCore
 
 @MainActor enum CLI {
-    static let version = "0.2.0"
+    static let version = "0.2.1"
     static let help = """
     Splash Finish \(version) — a landing strip for your AI agents
 
