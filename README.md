@@ -8,23 +8,14 @@ A little landing strip for AI agents. **Splash Finish** is a native macOS menu b
 
 Requires **macOS 14 or later** on Apple silicon or Intel. No Python packages, Homebrew, Xcode, `sudo`, or notification permissions required. Python **3.10+** is needed for the installer.
 
-Once the repository is public:
-
 ```sh
 curl -fsSL https://raw.githubusercontent.com/bobuk-io/splash-finish/main/install.py \
   | python3 -
 ```
 
-While the repository is **private**, authenticate with `gh auth login` and use:
-
-```sh
-gh api repos/bobuk-io/splash-finish/contents/install.py \
-  -H 'Accept: application/vnd.github.raw+json' | python3 -
-```
-
 The installer downloads the latest release, checks its SHA-256 and Developer ID signature, installs `Splash Finish.app` in `~/Applications`, and adds `splash-finish` to the first of `~/.local/bin`, `~/bin`, or `~/.bin` already on `PATH`. Otherwise it uses `~/.local/bin` and prints the line to add to your shell. Run it again to update.
 
-Release **0.1.2 and later** is signed with Developer ID and notarized by Apple. The earlier 0.1.0 and 0.1.1 releases are signed but not notarized.
+The release is signed with Developer ID and notarized by Apple.
 
 Then connect your agents:
 
@@ -45,7 +36,7 @@ The three bars in your menu bar are Splash Finish. One floating panel is shared 
 - **Needs attention** appears above **Completed**. A new result expands the same window; a long list scrolls.
 - **×** dismisses one notification. **Clear all** clears the list and hides the panel.
 - **Snooze** hides the panel for 15 minutes or until a genuinely new event arrives, whichever comes first. The inbox is retained, including across app restarts.
-- Click a row to return to its source when possible. A supplied session link is preferred; otherwise Splash Finish activates the originating app. macOS and terminal APIs do not guarantee the original tab or window can be selected.
+- Click a row to return to its source when possible. A supplied session link is preferred; WezTerm pane IDs are captured when available. If exact navigation fails, Splash Finish activates the originating app. Other terminals do not guarantee the original tab or window can be selected.
 - Use the menu bar to reopen the inbox, send a test notification, install integrations, or enable **Start at Login**. `Esc` snoozes; `⌘W` clears all when the panel has keyboard focus.
 
 ```sh
@@ -53,6 +44,7 @@ splash-finish show
 splash-finish snooze
 splash-finish clear
 splash-finish status             # local inbox as JSON
+splash-finish doctor             # integration status, repair hints and last event
 splash-finish --help
 ```
 
@@ -77,7 +69,7 @@ open 'splash-finish://event?agent=Codex&task=auth&status=done&title=Authenticati
 open 'splash-finish://show'
 ```
 
-`agent`, `task`, and `status` (`done`, `attention`, or `running`) are required. Optional fields: `id` (event replay ID), `title`, `detail`, `project`, `source-pid`, `source-bundle`, and `source-url`. Source URLs accept only `https`, `http`, `vscode`, `vscode-insiders`, `cursor`, `windsurf`, `zed`, `iterm2`, or `codex`. An `id` may be replayed safely; duplicate query parameters are rejected.
+`agent`, `task`, and `status` (`done`, `attention`, or `running`) are required. Optional fields: `id` (event replay ID), `title`, `detail`, `project`, `source-pid`, `source-bundle`, and `source-url`. Source URLs accept only `https`, `http`, `vscode`, `vscode-insiders`, `cursor`, `windsurf`, `zed`, `iterm2`, or `codex`. An `id` may be replayed safely; duplicate query parameters are rejected. Optional `run` and `sequence` are non-negative integers and must be provided together. They order updates per agent/task; older generations and non-increasing sequences are ignored, even after dismissing a notification. Once a task sends ordered updates, legacy unordered updates for that same task are ignored while the bounded ordering record remains. Pi supplies these fields; Claude and Codex hooks currently do not expose a reliable common ordering guarantee.
 
 Deep links are not authenticated: any local app can send them. They display bounded local text; Splash Finish never runs commands from a link. Open source links only if you trust the sender.
 
@@ -98,11 +90,13 @@ splash-finish uninstall-skills --agent codex
 
 Completions mean **the agent stopped responding**, not that its claims or tests were independently verified. Agent hook APIs and external tools vary by version; not every possible request for input is observable. Background agents, remote containers and hosts that do not expose the local macOS app may need to send events explicitly. Claude Code can emit the sandbox network permission notification after a delay. Other installed hooks may change agent behavior after a `Stop` event; Splash Finish is only an observer and cannot predict subsequent continuation.
 
+Open **Integrations…** in the menu bar or run `splash-finish doctor` to inspect installed files, hooks, update availability, and the last recorded event. Codex hook trust is not exposed to the inspector; use `/hooks` to check it. Event timestamps are recorded only by app versions supporting this feature.
+
 The installer preserves unrelated hooks/settings, rejects unmanaged files and symlinked configuration paths, and writes a uniquely named backup before changing an existing JSON config. Reinstall updates only Splash Finish entries. Config locations honor `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and `PI_CODING_AGENT_DIR`. Removal does not delete the app, unrelated hooks, or configuration backups. Existing pi sessions need `/reload` after either operation.
 
 ## 🔒 Local by default
 
-- No server, accounts, analytics, or external network requests during ordinary operation. The **installer** contacts GitHub.
+- No accounts, analytics, or servers operated by the app. Sparkle checks the public GitHub update feed, and the **installer** contacts GitHub.
 - The inbox is stored in `~/Library/Application Support/Splash Finish/state.json` with private file permissions. Event titles may contain short excerpts from the agent's final response; don't put secrets in them. Source URLs may also be persisted.
 - Hooks receive agent-supplied JSON locally, but the app stores only the short fields displayed in the inbox, not whole transcripts or tool inputs.
 - Event payloads are bounded; malformed links and unsafe source URL schemes are rejected. Hook failures do not block the agent or approve permissions.
@@ -128,7 +122,7 @@ Scripts/compile_and_run.sh --test      # ad-hoc local build
 SPLASH_FINISH_GUI_TESTS=1 python3 -m unittest discover -s Tests -p test_app_smoke.py -v
 ```
 
-`Package.swift` builds a SwiftUI/AppKit app and a separate testable core. `Scripts/package_app.sh` assembles the `.app`; no Xcode project or third-party Swift packages are required. `install.py` is a standalone standard-library installer. Tests use temporary directories and do not alter your agent configs.
+`Package.swift` builds a SwiftUI/AppKit app and a separate testable core, with the pinned Sparkle binary dependency. `Scripts/package_app.sh` assembles the `.app`; no Xcode project is required. `install.py` is a standalone standard-library installer. Tests use temporary directories and do not alter your agent configs.
 
 Create a **universal** release with an available Developer ID identity:
 
@@ -144,6 +138,18 @@ APP_IDENTITY='Developer ID Application: YOUR NAME (TEAMID)' \
 ```
 
 The script waits for Apple's response, staples the ticket, checks Gatekeeper, and regenerates the ZIP and checksum. It never creates a GitHub release on its own.
+
+### Sparkle updates
+
+The app embeds Sparkle 2.10.1 and checks the public `releases/latest/download/appcast.xml` feed.
+
+The Ed25519 private signing key is stored in the macOS login Keychain under account `io.bobuk.splash-finish`. Back it up securely offline: losing it prevents the current app from verifying updates. Never commit or publish it. The public key is embedded in the app. On the signing machine, obtain the verified Sparkle 2.10.1 release tools and set `SPARKLE_BIN` to their `bin` directory, then after notarizing run:
+
+```sh
+SPARKLE_BIN=/path/to/Sparkle/bin Scripts/make_appcast.sh
+```
+
+Upload `dist/appcast.xml`, the ZIP, and `SHA256SUMS` together to the corresponding GitHub release. Each release needs a higher `BUILD_NUMBER`. `Scripts/make_appcast.sh` verifies the Keychain public key and signs the final archive; do not modify the archive after generating its signature. The public release feed and archives are accessible to Sparkle without authentication.
 
 ---
 

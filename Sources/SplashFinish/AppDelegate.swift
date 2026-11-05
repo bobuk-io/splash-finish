@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import ServiceManagement
+import Sparkle
 import SplashFinishCore
 
 private final class SplashPanel: NSPanel {
@@ -14,6 +15,8 @@ private final class SplashPanel: NSPanel {
     private var statusItem: NSStatusItem!
     private var appLock: FileLock?
     private var panelSize = CGSize(width: 470, height: 350)
+    private var integrationsWindow: NSWindow?
+    private var updater: SPUStandardUpdaterController?
     private var pendingURLs = [URL]()
     private var observers = [NSObjectProtocol]()
 
@@ -45,8 +48,10 @@ private final class SplashPanel: NSPanel {
                 DispatchQueue.main.async { self?.resize(to: size) }
             }))
         model.onChange = { [weak self] reveal in self?.update(reveal: reveal) }
+        updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
         makeMenu()
         update(reveal: !model.items.isEmpty && !model.isSnoozed)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.offerIntegrationUpdates() }
         let urls = pendingURLs; pendingURLs.removeAll()
         urls.forEach(handle)
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -141,11 +146,13 @@ private final class SplashPanel: NSPanel {
         item("Clear All Notifications", #selector(clear), "w")
         menu.addItem(.separator())
         item("Send Test Notification", #selector(testNotification), "t")
+        item("Integrations…", #selector(showIntegrations), "i")
         item("Install Agent Skills…", #selector(installSkills))
         item("Uninstall Agent Skills…", #selector(uninstallSkills))
         item("Start at Login", #selector(toggleLogin))
         menu.items.last?.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(.separator())
+        item("Check for Updates…", #selector(checkForUpdates))
         item("About Splash Finish", #selector(about))
         item("Quit Splash Finish", #selector(quit), "q")
         statusItem.menu = menu
@@ -158,11 +165,41 @@ private final class SplashPanel: NSPanel {
         model.receive(AgentEvent(task: UUID().uuidString, agent: "Splash Finish", status: .done,
                                  title: "Your notifications are ready", detail: "Dismiss this one with ×", project: "welcome"))
     }
+    @objc private func checkForUpdates() { updater?.checkForUpdates(nil) }
     @objc private func about() {
         NSApp.activate()
         NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "Splash Finish",
                                                     .applicationVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0",
                                                     .credits: NSAttributedString(string: "One question. Two results. One window.\ngithub.com/bobuk-io/splash-finish")])
+    }
+    private func offerIntegrationUpdates() {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? CLI.version
+        let key = "integrationUpdateOfferVersion"
+        guard UserDefaults.standard.string(forKey: key) != version,
+              let statuses = try? CLI.integrationInstaller().inspect(inbox: model.inbox),
+              statuses.contains(where: { $0.state == "update available" }) else { return }
+        UserDefaults.standard.set(version, forKey: key)
+        let alert = NSAlert()
+        alert.messageText = "Agent integrations can be updated"
+        alert.informativeText = "Splash Finish found older integrations. Review them before updating; Codex may require hook trust again."
+        alert.addButton(withTitle: "Review Integrations")
+        alert.addButton(withTitle: "Later")
+        NSApp.activate()
+        if alert.runModal() == .alertFirstButtonReturn { showIntegrations() }
+    }
+    @objc private func showIntegrations() {
+        if integrationsWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 480),
+                                  styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                                  backing: .buffered, defer: false)
+            window.title = "Splash Finish — Integrations"
+            window.isReleasedWhenClosed = false
+            window.center()
+            integrationsWindow = window
+        }
+        integrationsWindow?.contentView = NSHostingView(rootView: IntegrationsView(model: model))
+        integrationsWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate()
     }
     @objc private func installSkills() { changeSkills(install: true) }
     @objc private func uninstallSkills() { changeSkills(install: false) }

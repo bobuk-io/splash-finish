@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import posixpath
 import shutil
 import subprocess
 import sys
@@ -96,17 +97,30 @@ def check_archive(archive: Path) -> None:
     total = 0
     try:
         with zipfile.ZipFile(archive) as bundle:
+            links: set[str] = set()
+            names: list[str] = []
             for entry in bundle.infolist():
                 name = entry.filename
                 path = Path(name)
                 if not name.startswith(APP_NAME + "/") or path.is_absolute() or ".." in path.parts or "\\" in name:
                     raise InstallError(f"Unexpected archive entry: {name}")
+                normalized = posixpath.normpath(name)
+                names.append(normalized)
                 if (entry.external_attr >> 16) & 0o170000 == 0o120000:
-                    raise InstallError(f"Symbolic link in archive: {name}")
+                    if entry.file_size > 1024:
+                        raise InstallError(f"Invalid symbolic link: {name}")
+                    target = bundle.read(entry).decode("utf-8", errors="strict")
+                    resolved = posixpath.normpath(posixpath.join(posixpath.dirname(normalized), target))
+                    if target.startswith("/") or "\\" in target or not resolved.startswith(APP_NAME + "/"):
+                        raise InstallError(f"Unsafe symbolic link: {name}")
+                    links.add(normalized)
                 total += entry.file_size
                 if total > MAX_UNPACKED_BYTES:
                     raise InstallError("Unpacked application exceeds size limit.")
-    except (zipfile.BadZipFile, OSError) as error:
+            for name in names:
+                if any(name.startswith(link + "/") for link in links):
+                    raise InstallError(f"Archive entry descends through a symbolic link: {name}")
+    except (zipfile.BadZipFile, OSError, UnicodeError) as error:
         raise InstallError("Invalid application archive.") from error
 
 

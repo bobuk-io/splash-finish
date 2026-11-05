@@ -1,9 +1,18 @@
 import Foundation
 
+public struct EventOrder: Codable, Equatable, Sendable {
+    public var run: Int64
+    public var sequence: Int64
+    public var received: Date
+}
+
 public struct Inbox: Codable, Equatable, Sendable {
     public private(set) var items: [AgentEvent] = []
     public private(set) var snoozedUntil: Date?
     public private(set) var seenEventIDs: [String] = []
+    // Optional for compatibility with state files written by older versions.
+    public private(set) var latestOrders: [String: EventOrder]?
+    public private(set) var lastEvents: [String: Date]?
     public init() {}
     public var attention: [AgentEvent] { items.filter { $0.status == .attention } }
     public var completed: [AgentEvent] { items.filter { $0.status == .done } }
@@ -12,9 +21,32 @@ public struct Inbox: Codable, Equatable, Sendable {
     @discardableResult public mutating func receive(_ raw: AgentEvent) throws -> Bool {
         let event = try raw.validated()
         guard !seenEventIDs.contains(event.id) else { return false }
+        // Once a producer upgrades a task to ordered events, do not let a delayed
+        // legacy event erase the newer state. Ordering metadata is per task.
+        if event.run == nil && latestOrders?[event.key] != nil { return false }
+        if let run = event.run, let sequence = event.sequence {
+            var orders = latestOrders ?? [:]
+            if let current = orders[event.key],
+               run < current.run || (run == current.run && sequence <= current.sequence) { return false }
+            orders[event.key] = EventOrder(run: run, sequence: sequence, received: Date())
+            if orders.count > 512 {
+                for key in orders.sorted(by: { $0.value.received < $1.value.received }).prefix(orders.count - 512).map(\.key) {
+                    orders.removeValue(forKey: key)
+                }
+            }
+            latestOrders = orders
+        }
+        var timestamps = lastEvents ?? [:]
+        timestamps[event.agent.lowercased()] = Date()
+        lastEvents = timestamps
         seenEventIDs.append(event.id)
         seenEventIDs = Array(seenEventIDs.suffix(512))
         if event.status == .running {
+            // Concurrent tool-completion hooks can arrive after the final Stop.
+            // A progress event can clear attention, but not a completed result.
+            if event.phase == "progress", items.contains(where: { $0.key == event.key && $0.status == .done }) {
+                return false
+            }
             items.removeAll { $0.key == event.key }
             if items.isEmpty { snoozedUntil = nil }
             return false

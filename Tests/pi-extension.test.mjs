@@ -16,9 +16,12 @@ try {
   const ctx = { cwd: '/code/demo', sessionManager: { getSessionId: () => 'session-123' } };
   await handlers.before_agent_start({}, ctx);
   assert.equal(calls.at(-1).status, 'running');
+  const firstRun = calls.at(-1).run;
+  assert.equal(calls.at(-1).sequence, 1);
   await handlers.ui_prompt_start({title: 'Approve migration?'}, ctx);
   assert.equal(calls.at(-1).status, 'attention');
   assert.equal(calls.at(-1).title, 'Approve migration?');
+  assert.equal(calls.at(-1).sequence, 2);
   await handlers.ui_prompt_end({}, ctx);
   assert.equal(calls.at(-1).status, 'running');
   await handlers.tool_call({toolName:'ask_user'}, ctx);
@@ -35,6 +38,8 @@ try {
   await handlers.agent_settled({aborted:false}, ctx);
   assert.equal(calls.length, count, 'settled must not notify twice');
   await handlers.before_agent_start({}, ctx);
+  assert.ok(calls.at(-1).run > firstRun);
+  assert.equal(calls.at(-1).sequence, 1);
   await handlers.message_end({message:{role:'assistant', content:[], stopReason:'error'}}, ctx);
   await handlers.agent_settled({aborted:false}, ctx);
   assert.equal(calls.at(-1).status, 'attention');

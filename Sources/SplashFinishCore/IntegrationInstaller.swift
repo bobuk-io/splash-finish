@@ -1,7 +1,15 @@
 import Foundation
 
-public enum AgentKind: String, CaseIterable {
+public enum AgentKind: String, CaseIterable, Sendable {
     case claude, codex, pi
+}
+
+public struct IntegrationStatus: Identifiable, Sendable {
+    public var id: String { agent.rawValue }
+    public var agent: AgentKind
+    public var state: String
+    public var detail: String
+    public var lastEvent: Date?
 }
 
 public struct IntegrationInstaller {
@@ -111,6 +119,60 @@ public struct IntegrationInstaller {
         if FileManager.default.fileExists(atPath: url.path) {
             guard let text = try? String(contentsOf: url, encoding: .utf8), text.contains(fileMarker) else {
                 throw EventError.invalid("Refusing to overwrite an unmanaged file: \(url.path)")
+            }
+        }
+    }
+    public func inspect(inbox: Inbox) -> [IntegrationStatus] {
+        AgentKind.allCases.map { agent in
+            let display = agent == .claude ? "claude code" : agent.rawValue
+            let last = inbox.lastEvents?[display]
+            do {
+                let files = try managedFiles(agent)
+                let existing = files.filter { FileManager.default.fileExists(atPath: $0.0.path) }
+                for (url, _) in existing { try checkOwnership(url) }
+                var hooksPresent = agent == .pi
+                var hooksCurrent = true
+                var hookCount = 0
+                if agent != .pi {
+                    let config = try readObject(configuration(agent))
+                    if let raw = config["hooks"], !(raw is [String: Any]) { throw EventError.invalid("Invalid hooks object") }
+                    let hooks = config["hooks"] as? [String: Any] ?? [:]
+                    var required: Set<String> = ["Stop", "PermissionRequest", "UserPromptSubmit", "PostToolUse", "SessionEnd"]
+                    if agent == .claude { required.formUnion(["Notification", "StopFailure"]) }
+                    else { required.insert("Interrupt") }
+                    var found: Set<String> = []
+                    for (eventName, value) in hooks {
+                        guard let groups = value as? [[String: Any]] else { throw EventError.invalid("Invalid hook group") }
+                        for group in groups {
+                            guard let handlers = group["hooks"] as? [[String: Any]] else { throw EventError.invalid("Invalid hook handlers") }
+                            let ours = handlers.filter(owned)
+                            hookCount += ours.count
+                            if !ours.isEmpty { found.insert(eventName) }
+                            if ours.contains(where: { ($0["command"] as? String) != "\(quote(executable)) hook \(agent.rawValue) \(marker)" }) {
+                                hooksCurrent = false
+                            }
+                        }
+                    }
+                    hooksPresent = required.isSubset(of: found)
+                }
+                if existing.isEmpty && !hooksPresent && hookCount == 0 {
+                    return IntegrationStatus(agent: agent, state: "not installed", detail: "Install the integration to receive events.", lastEvent: last)
+                }
+                if agent == .pi && existing.isEmpty {
+                    return IntegrationStatus(agent: agent, state: "not installed", detail: "Install the integration to receive events.", lastEvent: last)
+                }
+                let filesCurrent = existing.count == files.count && files.allSatisfy { (try? Data(contentsOf: $0.0)) == $0.1 }
+                if !hooksPresent || existing.count != files.count {
+                    return IntegrationStatus(agent: agent, state: "incomplete", detail: "Some managed files or hooks are missing. Reinstall to repair.", lastEvent: last)
+                }
+                if !filesCurrent || !hooksCurrent {
+                    return IntegrationStatus(agent: agent, state: "update available", detail: "Managed files differ from this app. Reinstall to update.", lastEvent: last)
+                }
+                let detail = agent == .codex ? "Installed. Hook trust is not detectable: review /hooks in Codex." :
+                    agent == .pi ? "Installed. Run /reload in existing pi sessions." : "Installed. Restart Claude Code to load hooks."
+                return IntegrationStatus(agent: agent, state: "installed", detail: detail, lastEvent: last)
+            } catch {
+                return IntegrationStatus(agent: agent, state: "error", detail: error.localizedDescription, lastEvent: last)
             }
         }
     }

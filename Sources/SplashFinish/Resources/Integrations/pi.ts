@@ -3,14 +3,15 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { execFile } from "node:child_process";
 import { basename } from "node:path";
 
-type Notice = { task: string; status: "done" | "attention" | "running"; title: string; detail: string; project: string };
+type Notice = { task: string; status: "done" | "attention" | "running"; title: string; detail: string; project: string; run: number; sequence: number };
 type Sender = (notice: Notice) => Promise<void>;
 
 function send(notice: Notice): Promise<void> {
     // The installer injects the absolute bundled binary path. No shell, no PATH dependency.
     const executable: string = __EXECUTABLE_JSON__;
     const args = ["notify", "--agent", "pi", "--task", notice.task, "--status", notice.status,
-        "--title", notice.title || "Response completed", "--detail", notice.detail || " ", "--project", notice.project || " "];
+        "--title", notice.title || "Response completed", "--detail", notice.detail || " ", "--project", notice.project || " ",
+        "--run", String(notice.run), "--sequence", String(notice.sequence)];
     return new Promise(resolve => {
         execFile(executable, args, { timeout: 2500, maxBuffer: 16384 }, () => resolve());
     });
@@ -21,14 +22,18 @@ export function register(pi: ExtensionAPI, emit: Sender = send): void {
     let lastText = "";
     let failed = false;
     let active = false;
+    let run = Date.now();
+    let sequence = 0;
     const notice = async (ctx: ExtensionContext, status: Notice["status"], title: string, detail = "") => {
         try {
+            const currentSequence = ++sequence;
             await emit({ task: ctx.sessionManager.getSessionId(), status, title,
-                detail, project: basename(ctx.cwd) });
+                detail, project: basename(ctx.cwd), run, sequence: currentSequence });
         } catch { /* Notifications must never interrupt the agent. */ }
     };
     pi.on("before_agent_start", async (_event, ctx) => {
         active = true; lastText = ""; failed = false;
+        run = Math.max(Date.now(), run + 1); sequence = 0;
         await notice(ctx, "running", "Working");
     });
     pi.on("message_end", async (event) => {

@@ -54,6 +54,19 @@ class InstallTests(unittest.TestCase):
         with self.assertRaises(installer.InstallError):
             installer.check_archive(self.archive)
 
+    def test_framework_relative_symlinks_are_safe(self):
+        with zipfile.ZipFile(self.archive, "w") as bundle:
+            bundle.writestr("Splash Finish.app/Contents/Frameworks/Sparkle.framework/Versions/B/Sparkle", "binary")
+            link = zipfile.ZipInfo("Splash Finish.app/Contents/Frameworks/Sparkle.framework/Versions/Current")
+            link.create_system = 3
+            link.external_attr = 0o120777 << 16
+            bundle.writestr(link, "B")
+        installer.check_archive(self.archive)
+        with zipfile.ZipFile(self.archive, "a") as bundle:
+            bundle.writestr("Splash Finish.app/Contents/Frameworks/Sparkle.framework/Versions/Current/evil", "no")
+        with self.assertRaises(installer.InstallError):
+            installer.check_archive(self.archive)
+
     def test_unrelated_bin_is_never_overwritten(self):
         self.make_zip({"Splash Finish.app/Contents/MacOS/SplashFinish": "binary"})
         bindir = self.root / "bin"

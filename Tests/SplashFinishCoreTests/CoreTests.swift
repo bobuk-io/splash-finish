@@ -42,6 +42,39 @@ final class InboxTests: XCTestCase {
         inbox.dismiss(key: "codex:two"); XCTAssertNil(inbox.snoozedUntil)
         XCTAssertFalse(inbox.wakeIfDue(now: .distantFuture))
     }
+    func testOrderedRunsRejectLateEventsEvenAfterDismissOrRestart() throws {
+        var inbox = Inbox()
+        func ordered(_ run: Int64, _ sequence: Int64, _ status: EventStatus) -> AgentEvent {
+            AgentEvent(task: "session", agent: "pi", status: status, title: "update", run: run, sequence: sequence)
+        }
+        XCTAssertTrue(try inbox.receive(ordered(10, 2, .done)))
+        XCTAssertFalse(try inbox.receive(ordered(10, 1, .running)))
+        XCTAssertEqual(inbox.items.first?.status, .done)
+        XCTAssertFalse(try inbox.receive(AgentEvent(task: "session", agent: "pi", status: .running, title: "late legacy")))
+        inbox.dismiss(key: "pi:session")
+        inbox = try JSONDecoder().decode(Inbox.self, from: JSONEncoder().encode(inbox))
+        XCTAssertFalse(try inbox.receive(ordered(10, 1, .attention)))
+        XCTAssertTrue(inbox.items.isEmpty)
+        XCTAssertTrue(try inbox.receive(ordered(11, 1, .attention)))
+        XCTAssertFalse(try inbox.receive(ordered(10, 100, .done)))
+        XCTAssertEqual(inbox.items.first?.status, .attention)
+        inbox.clear()
+        XCTAssertFalse(try inbox.receive(ordered(11, 1, .attention)))
+        XCTAssertTrue(try inbox.receive(ordered(12, 1, .done)))
+    }
+    func testLateToolProgressCannotEraseCompletedHook() throws {
+        var inbox = Inbox()
+        try inbox.receive(AgentEvent(task: "s", agent: "Codex", status: .done, title: "Done"))
+        try inbox.receive(AgentEvent(task: "s", agent: "Codex", status: .running, title: "Working", phase: "progress"))
+        XCTAssertEqual(inbox.items.first?.status, .done)
+        try inbox.receive(AgentEvent(task: "s", agent: "Codex", status: .running, title: "Working"))
+        XCTAssertTrue(inbox.items.isEmpty)
+    }
+    func testLegacyInboxDecodesWithoutOrderingMetadata() throws {
+        let old = Data(#"{"items":[],"seenEventIDs":[]}"#.utf8)
+        let inbox = try JSONDecoder().decode(Inbox.self, from: old)
+        XCTAssertNil(inbox.latestOrders); XCTAssertNil(inbox.lastEvents)
+    }
     func testQueueAndReplayHistoryAreBounded() throws {
         var inbox = Inbox()
         for i in 0..<600 { try inbox.receive(event(String(i))) }
@@ -53,11 +86,12 @@ final class EventTests: XCTestCase {
     func testDeepLinkRoundTripAndEscaping() throws {
         let event = AgentEvent(task: "session & ? café", agent: "Claude Code", status: .attention,
                                title: "Apply 'migration' & test?", detail: "100% ready + review",
-                               project: "日本語", source: EventSource(pid: 123, bundleID: "com.apple.Terminal", url: "vscode://file/tmp/work"))
+                               project: "日本語", source: EventSource(pid: 123, bundleID: "com.apple.Terminal", url: "vscode://file/tmp/work", weztermPane: 34), run: 1234, sequence: 9)
         let result = try DeepLink.parse(DeepLink.eventURL(event))
         XCTAssertEqual(result.id, event.id); XCTAssertEqual(result.key, event.key)
         XCTAssertEqual(result.title, event.title); XCTAssertEqual(result.detail, event.detail)
         XCTAssertEqual(result.project, event.project); XCTAssertEqual(result.source, event.source)
+        XCTAssertEqual(result.run, 1234); XCTAssertEqual(result.sequence, 9)
     }
     func testRejectBadURLs() {
         for raw in ["https://event?agent=a&task=t&status=done", "splash-finish://event?agent=a&task=t&status=nope",
@@ -126,6 +160,17 @@ final class FilesAndInstallerTests: XCTestCase {
         XCTAssertTrue(restored.isEqual(to: original))
         XCTAssertFalse(FileManager.default.fileExists(atPath: extensionURL.path))
         _ = try installer.run(install: false, agents: AgentKind.allCases)
+    }
+    func testDoctorDetectsInstallOutdatedAndLastEvent() throws {
+        var inbox = Inbox()
+        XCTAssertEqual(installer.inspect(inbox: inbox).map(\.state), ["not installed", "not installed", "not installed"])
+        _ = try installer.run(install: true, agents: [.pi])
+        try inbox.receive(AgentEvent(task: "s", agent: "pi", status: .done, title: "done"))
+        let installed = installer.inspect(inbox: inbox).last!
+        XCTAssertEqual(installed.state, "installed"); XCTAssertNotNil(installed.lastEvent)
+        let skill = home.appendingPathComponent(".pi/agent/skills/splash-finish/SKILL.md")
+        try Data("<!-- Managed by Splash Finish --> old".utf8).write(to: skill)
+        XCTAssertEqual(installer.inspect(inbox: inbox).last?.state, "update available")
     }
     func testInvalidConfigPreflightDoesNotWriteOtherFiles() throws {
         let url = home.appendingPathComponent(".codex/hooks.json")

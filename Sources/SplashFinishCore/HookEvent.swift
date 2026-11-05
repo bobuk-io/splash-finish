@@ -36,6 +36,7 @@ public enum HookEvent {
         default: return nil
         }
         return try AgentEvent(task: session, agent: display, status: status, title: title,
-                              detail: detail, project: project, source: source).validated()
+                              detail: detail, project: project, source: source,
+                              phase: name == "PostToolUse" ? "progress" : nil).validated()
     }
 }

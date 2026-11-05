@@ -36,6 +36,13 @@ private struct NotificationRow: View {
     @State private var hovered = false
     @State private var dismissHovered = false
     private let muted = Color(hex: 0xA4AFB3)
+    private var sourceAction: String {
+        if event.source?.url != nil { return "Open source session" }
+        if event.source?.weztermPane != nil { return "Open WezTerm pane if available" }
+        if event.source?.bundleID == "com.github.wez.wezterm" { return "Activate WezTerm" }
+        if event.source?.bundleID != nil { return "Activate source app" }
+        return "Source unavailable"
+    }
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
             // Deliberately separate from dismiss, never nested buttons.
@@ -74,8 +81,8 @@ private struct NotificationRow: View {
                         .foregroundStyle(hovered ? Color.white : muted).padding(.top, 25)
                 }.padding(.vertical, 4).contentShape(.rect)
             }.buttonStyle(.plain).onHover { hovered = $0 }
-                .help("Open source · \(event.title)")
-                .accessibilityLabel("Open \(event.agent): \(event.title)")
+                .help("\(sourceAction) · \(event.title)")
+                .accessibilityLabel("\(sourceAction): \(event.agent), \(event.title)")
             Button(action: onDismiss) {
                 Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(dismissHovered ? Color.white : muted)

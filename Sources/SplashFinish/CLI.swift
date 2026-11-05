@@ -2,7 +2,7 @@ import AppKit
 import SplashFinishCore
 
 @MainActor enum CLI {
-    static let version = "0.1.2"
+    static let version = "0.2.0"
     static let help = """
     Splash Finish \(version) — a landing strip for your AI agents
 
@@ -13,6 +13,7 @@ import SplashFinishCore
       snooze                       Hide until the next event or for 15 minutes
       clear                        Dismiss every notification and hide
       status                       Print the persisted inbox as JSON
+      doctor                       Diagnose agent integrations
       install-skills               Install agent skills, hooks and pi extension
       uninstall-skills             Remove only Splash Finish integrations
       version                      Print the version
@@ -25,6 +26,8 @@ import SplashFinishCore
       --detail TEXT                Supporting text
       --project NAME               Project label (default: working directory)
       --source-url URL             Optional link to the originating session
+      --run INTEGER                Optional monotonic run generation
+      --sequence INTEGER           Optional sequence within the run
 
     install-skills / uninstall-skills options:
       --agent all|claude|codex|pi   Default: all
@@ -54,7 +57,11 @@ import SplashFinishCore
         subscript(_ name: String) -> String? { values["--" + name] }
     }
     static var executable: String {
-        URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.resolvingSymlinksInPath().path
+        // Finder/Launch Services can supply a bare argv[0], unrelated to the current directory.
+        if Bundle.main.bundleURL.pathExtension == "app", let url = Bundle.main.executableURL {
+            return url.standardizedFileURL.resolvingSymlinksInPath().path
+        }
+        return URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.resolvingSymlinksInPath().path
     }
     static func integrationInstaller() throws -> IntegrationInstaller {
         guard let resources = Bundle.module.url(forResource: "Integrations", withExtension: nil) else {
@@ -103,17 +110,31 @@ import SplashFinishCore
                 let state = try StateFile(url: AppPaths.state).load()
                 let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
                 print(String(decoding: try encoder.encode(state), as: UTF8.self))
+            case "doctor":
+                guard args.count == 1 else { throw EventError.invalid("doctor takes no arguments") }
+                let inbox = try StateFile(url: AppPaths.state).load()
+                let statuses = try integrationInstaller().inspect(inbox: inbox)
+                let formatter = ISO8601DateFormatter()
+                for item in statuses {
+                    print("\(item.agent.rawValue): \(item.state)")
+                    print("  \(item.detail)")
+                    print("  Last event: \(item.lastEvent.map { formatter.string(from: $0) } ?? "none recorded")")
+                }
             case "notify":
-                let options = try Options(args.dropFirst(), allowed: ["--agent", "--task", "--status", "--title", "--detail", "--project", "--source-url"])
+                let options = try Options(args.dropFirst(), allowed: ["--agent", "--task", "--status", "--title", "--detail", "--project", "--source-url", "--run", "--sequence"])
                 guard let agent = options["agent"], let task = options["task"],
                       let status = EventStatus(rawValue: options["status"] ?? "done") else {
                     throw EventError.invalid("notify requires --agent, --task and a valid --status")
                 }
                 var source = SourceNavigator.capture() ?? EventSource()
                 source.url = options["source-url"]
+                let run = options["run"].flatMap(Int64.init), sequence = options["sequence"].flatMap(Int64.init)
+                guard (options["run"] == nil && options["sequence"] == nil) || (run != nil && sequence != nil) else {
+                    throw EventError.invalid("--run and --sequence must both be integers")
+                }
                 let event = AgentEvent(task: task, agent: agent, status: status, title: options["title"] ?? "",
                                        detail: options["detail"] ?? "", project: options["project"] ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath).lastPathComponent,
-                                       source: source)
+                                       source: source, run: run, sequence: sequence)
                 try send(DeepLink.eventURL(event))
             case "install-skills", "uninstall-skills":
                 let options = try Options(args.dropFirst(), allowed: ["--agent"])

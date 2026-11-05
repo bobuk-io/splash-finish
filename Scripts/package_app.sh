@@ -49,6 +49,9 @@ fi
 
 BUILD_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+if [[ -n "$(git status --porcelain 2>/dev/null || true)" ]]; then
+  GIT_COMMIT="${GIT_COMMIT}-dirty"
+fi
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -65,6 +68,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>${MACOS_MIN_VERSION}</string>
     <key>LSUIElement</key><${LSUI_VALUE}/>
     <key>CFBundleIconFile</key><string>Icon</string>
+    <key>SUFeedURL</key><string>https://github.com/bobuk-io/splash-finish/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key><string>UgU/VhTFdMVMUUwDG2TYW+cvn6ruGpfsdI82c02GdrA=</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
     <key>CFBundleURLTypes</key><array><dict>
