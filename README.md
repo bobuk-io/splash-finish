@@ -24,7 +24,7 @@ gh api repos/bobuk-io/splash-finish/contents/install.py \
 
 The installer downloads the latest release, checks its SHA-256 and Developer ID signature, installs `Splash Finish.app` in `~/Applications`, and adds `splash-finish` to the first of `~/.local/bin`, `~/bin`, or `~/.bin` already on `PATH`. Otherwise it uses `~/.local/bin` and prints the line to add to your shell. Run it again to update.
 
-The first release is **Developer ID signed but not notarized**. macOS Gatekeeper may block the downloaded app: use Finder → Control-click the app → Open, or System Settings → Privacy & Security → Open Anyway. Check the signature and checksum before doing so. A signature is not the same as Apple notarization.
+Release **0.1.2 and later** is signed with Developer ID and notarized by Apple. The earlier 0.1.0 and 0.1.1 releases are signed but not notarized.
 
 Then connect your agents:
 

@@ -200,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f'Add to PATH: export PATH="{bin_dir}:$PATH"')
         print("Next: splash-finish install-skills")
         print("Codex: open /hooks and trust the installed hooks. Pi: /reload existing sessions.")
-        print("Note: an unnotarized release may require manual Gatekeeper approval.")
+        print("If macOS blocks the app, verify its signature and notarization before opening it.")
         return 0
     except (InstallError, OSError, subprocess.SubprocessError) as error:
         print(f"Install failed: {error}", file=sys.stderr)
