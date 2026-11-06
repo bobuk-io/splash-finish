@@ -4,7 +4,17 @@ import SplashFinishCore
 @MainActor enum CLI {
     /// Single source of truth is version.env, injected into Info.plist by package_app.sh.
     static var version: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0-dev"
+        // In a SwiftPM executable Bundle.main is not the .app bundle on every launch
+        // path (notably when called through the installed CLI symlink). Resolve the
+        // containing application bundle explicitly, then fall back to package metadata.
+        let main = Bundle.main
+        if let value = main.infoDictionary?["CFBundleShortVersionString"] as? String { return value }
+        let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.resolvingSymlinksInPath()
+        let containingApp = executable.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        if containingApp.pathExtension == "app",
+           let appBundle = Bundle(url: containingApp),
+           let value = appBundle.infoDictionary?["CFBundleShortVersionString"] as? String { return value }
+        return "0.0.0-dev"
     }
     static let help = """
     Splash Finish \(version) — a landing strip for your AI agents

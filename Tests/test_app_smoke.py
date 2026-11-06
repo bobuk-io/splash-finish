@@ -21,6 +21,15 @@ APP = ROOT / "build/Splash Finish.app/Contents/MacOS/SplashFinish"
 
 @unittest.skipUnless(os.getenv("SPLASH_FINISH_GUI_TESTS") == "1", "set SPLASH_FINISH_GUI_TESTS=1 for graphical smoke test")
 class AppSmokeTests(unittest.TestCase):
+    def test_cli_version_matches_app_bundle(self):
+        self.assertTrue(APP.is_file(), "Build the packaged app before running this check")
+        expected = subprocess.check_output([
+            "/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString",
+            str(APP.parents[1] / "Info.plist")
+        ], text=True).strip()
+        actual = subprocess.check_output([str(APP), "--version"], text=True).strip()
+        self.assertEqual(actual, expected)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="splash-finish-e2e-")
         self.addCleanup(self.temp.cleanup)
