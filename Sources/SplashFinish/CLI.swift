@@ -144,7 +144,7 @@ import SplashFinishCore
                     print("attention: \(state.attention.count)  completed: \(state.completed.count)  snoozed: \(state.snoozedUntil.map { formatter.string(from: $0) } ?? "no")")
                     // Newest first, matching how the panel groups attention before completed.
                     for event in (state.attention + state.completed).reversed() {
-                        print([event.status.rawValue, event.agent, event.project, event.title]
+                        print([event.status.rawValue, event.agent, event.project, MessageText.plain(event.title, limit: 160)]
                             .filter { !$0.isEmpty }.joined(separator: " | "))
                     }
                     if !state.items.isEmpty { print("Use --raw for the full JSON state.") }

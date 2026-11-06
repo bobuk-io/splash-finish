@@ -6,6 +6,20 @@ import { basename } from "node:path";
 type Notice = { task: string; status: "done" | "attention" | "running"; title: string; detail: string; project: string; run: number; sequence: number };
 type Sender = (notice: Notice) => Promise<void>;
 
+// Preserve complete Markdown tokens for the app to parse before display clipping.
+// Bound the subprocess payload by UTF-8 bytes, without splitting a Unicode scalar.
+function messagePreview(text: string): string {
+    let result = "";
+    let bytes = 0;
+    for (const character of text.replace(/\s+/g, " ").trim()) {
+        const length = Buffer.byteLength(character, "utf8");
+        if (bytes + length > 4096) break;
+        result += character;
+        bytes += length;
+    }
+    return result;
+}
+
 function send(notice: Notice): Promise<void> {
     // The installer injects the absolute bundled binary path. No shell, no PATH dependency.
     const executable: string = __EXECUTABLE_JSON__;
@@ -69,7 +83,7 @@ export function register(pi: ExtensionAPI, emit: Sender = send): void {
         active = false;
         if (event.aborted) { notice(ctx, "running", "Interrupted"); return; }
         notice(ctx, failed ? "attention" : "done",
-            failed ? "Agent stopped with an error" : lastText.replace(/\s+/g, " ").slice(0, 110) || "Response completed",
+            failed ? "Agent stopped with an error" : messagePreview(lastText) || "Response completed",
             failed ? "Open the session for details" : "Ready for review");
     });
     pi.on("ui_prompt_start", async (event, ctx) => {

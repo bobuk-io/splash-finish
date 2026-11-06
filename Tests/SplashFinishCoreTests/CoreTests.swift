@@ -132,8 +132,10 @@ final class EventTests: XCTestCase {
     }
     func testTruncationAndControlCharacters() throws {
         let event = try AgentEvent(task: "task", agent: "Codex", status: .done,
-                                   title: "hello\u{1B}\nworld\t" + String(repeating: "x", count: 400)).validated()
-        XCTAssertEqual(event.title.count, 160); XCTAssertTrue(event.title.hasPrefix("hello world "))
+                                   title: "hello\u{1B}\nworld\t" + String(repeating: "x", count: 5000)).validated()
+        XCTAssertEqual(event.title.utf8.count, MessageText.maximumBytes)
+        XCTAssertTrue(event.title.hasPrefix("hello world "))
+        XCTAssertEqual(MessageText.plain(event.title, limit: 160).count, 161)
     }
     func testHookMapping() throws {
         func parse(_ event: String, extra: [String: Any] = [:], agent: String = "codex") throws -> AgentEvent? {

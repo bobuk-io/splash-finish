@@ -119,6 +119,20 @@ class AppSmokeTests(unittest.TestCase):
                 "terminal": "term_original", "worktree": env["ORCA_WORKTREE_ID"], "pane": "tab-1:leaf-1"})
             self.assertEqual(event["source"]["bundleID"], "com.stablyai.orca")
 
+    def test_markdown_payload_survives_cli_without_early_truncation(self):
+        target = 'https://example.com/report/' + 'a' * 250
+        title = f'Готово: [**релиз**]({target}) опубликован.'
+        self.run_cli('notify', '--agent', 'pi', '--task', 'markdown', '--title', title,
+                     '--detail', '**Проверено** · `swift test`')
+        state = self.wait_for(lambda s: any(x['task'] == 'markdown' for x in s['items']))
+        event = next(x for x in state['items'] if x['task'] == 'markdown')
+        self.assertEqual(event['title'], title)
+        self.assertEqual(event['detail'], '**Проверено** · `swift test`')
+        summary = self.run_cli('status').stdout
+        self.assertIn('Готово: релиз опубликован.', summary)
+        self.assertNotIn(target, summary)
+        self.assertNotIn('[**', summary)
+
     def test_delivery_snooze_and_hook_lifecycle(self):
         self.run_cli("notify", "--agent", "Codex", "--task", "one", "--title", "First task")
         self.wait_for(lambda s: len(s["items"]) == 1)

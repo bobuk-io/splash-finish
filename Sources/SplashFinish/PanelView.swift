@@ -39,6 +39,7 @@ private struct NotificationRow: View {
     private let muted = Color(hex: 0xA4AFB3)
     private var sourceAction: String {
         if event.source?.url != nil { return "Open source session" }
+        if event.source?.orca?.targets.first == .chat { return "Open original Orca chat" }
         if event.source?.orca != nil { return "Open original Orca project and terminal" }
         if event.source?.weztermPane != nil { return "Open WezTerm pane if available" }
         if event.source?.bundleID == "com.github.wez.wezterm" { return "Activate WezTerm" }
@@ -47,9 +48,8 @@ private struct NotificationRow: View {
     }
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
-            // Deliberately separate from dismiss, never nested buttons.
-            Button(action: onOpen) {
-                HStack(alignment: .top, spacing: 14) {
+            // Links, source navigation and dismiss have separate hit targets.
+            HStack(alignment: .top, spacing: 14) {
                     VStack(spacing: 8) {
                         Image(systemName: event.status == .attention ? "exclamationmark" : "checkmark")
                             .font(.system(size: 11, weight: .bold))
@@ -57,7 +57,7 @@ private struct NotificationRow: View {
                             .frame(width: 23, height: 23)
                             .background(event.status == .attention ? Color(hex: 0x51442F) : Color(hex: 0x2E403A), in: .circle)
                         Rectangle().fill(.white.opacity(0.09)).frame(width: 1, height: 39)
-                    }
+                    }.allowsHitTesting(false)
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 7) {
                             Text(event.agent.uppercased())
@@ -68,23 +68,34 @@ private struct NotificationRow: View {
                                 Text("/ " + event.project).font(.system(size: 10, design: .monospaced))
                                     .foregroundStyle(muted).lineLimit(1).truncationMode(.middle)
                             }
-                        }
-                        Text(event.title).font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(Color(hex: 0xEEF1EC)).lineLimit(2).multilineTextAlignment(.leading)
-                            .fixedSize(horizontal: false, vertical: true)
+                        }.allowsHitTesting(false)
+                        MessagePreview(text: event.title, size: 16,
+                            color: NSColor(srgbRed: 0.933, green: 0.945, blue: 0.925, alpha: 1),
+                            lines: 2, characterLimit: 160, onOpenSource: onOpen)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         HStack(spacing: 5) {
-                            if !event.detail.isEmpty { Text(event.detail).lineLimit(1) }
-                            if !event.detail.isEmpty { Text("·") }
-                            Text(event.date, style: .relative).lineLimit(1).fixedSize()
+                            if !event.detail.isEmpty {
+                                MessagePreview(text: event.detail, size: 11,
+                                    color: NSColor(srgbRed: 0.643, green: 0.686, blue: 0.702, alpha: 1),
+                                    lines: 1, characterLimit: 400, onOpenSource: onOpen)
+                                Text("·").allowsHitTesting(false)
+                            }
+                            Text(event.date, style: .relative).lineLimit(1).fixedSize().allowsHitTesting(false)
                         }.font(.system(size: 11)).foregroundStyle(muted)
                     }.padding(.top, 3)
                     Spacer(minLength: 0)
-                    Image(systemName: "arrow.up.right").font(.system(size: 12))
-                        .foregroundStyle(hovered ? Color.white : muted).padding(.top, 25)
-                }.padding(.vertical, 4).contentShape(.rect)
-            }.buttonStyle(.plain).onHover { hovered = $0 }
-                .help("\(sourceAction) · \(event.title)")
-                .accessibilityLabel("\(sourceAction): \(event.agent), \(event.title)")
+                    Button(action: onOpen) {
+                        Image(systemName: "arrow.up.right").font(.system(size: 12))
+                            .foregroundStyle(hovered ? Color.white : muted)
+                    }.buttonStyle(.plain).padding(.top, 25).accessibilityLabel(sourceAction)
+                }.padding(.vertical, 4)
+                .background {
+                    Button(action: onOpen) { Color.clear.contentShape(.rect) }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("\(sourceAction): \(event.agent), \(MessageText.plain(event.title, limit: 160))")
+                }
+                .onHover { hovered = $0 }
+                .help("\(sourceAction) · \(MessageText.plain(event.title))")
             Button(action: onDismiss) {
                 Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(dismissHovered ? Color.white : muted)
@@ -94,7 +105,7 @@ private struct NotificationRow: View {
             }.buttonStyle(.plain).padding(.top, 22)
                 .onHover { dismissHovered = $0 }
                 .help("Dismiss notification")
-                .accessibilityLabel("Dismiss \(event.agent): \(event.title)")
+                .accessibilityLabel("Dismiss \(event.agent): \(MessageText.plain(event.title, limit: 160))")
         }.padding(.horizontal, 4)
             .background(.white.opacity(selected ? 0.09 : hovered ? 0.025 : 0), in: .rect(cornerRadius: 6))
             .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(selected ? 0.17 : 0)))

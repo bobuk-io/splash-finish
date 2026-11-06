@@ -137,7 +137,8 @@ public struct StateFile {
         try SafeFiles.check(url)
         guard FileManager.default.fileExists(atPath: url.path) else { return Inbox() }
         let data = try Data(contentsOf: url)
-        guard data.count <= 2_000_000 else { throw EventError.invalid("Inbox state is too large") }
+        // 200 bounded Markdown payloads, including JSON escaping and source metadata.
+        guard data.count <= 8_000_000 else { throw EventError.invalid("Inbox state is too large") }
         return try JSONDecoder().decode(Inbox.self, from: data)
     }
     public func save(_ inbox: Inbox) throws {

@@ -18,7 +18,7 @@ public enum HookEvent {
             // A Stop hook means a response ended, not that its claims were verified.
             status = .done
             let answer = json["last_assistant_message"] as? String ?? ""
-            title = AgentEvent.clean(answer, limit: 110)
+            title = MessageText.clean(answer)
             if title.isEmpty { title = "Response completed" }
             detail = "Ready for review"
         case "StopFailure":

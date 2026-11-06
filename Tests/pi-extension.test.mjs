@@ -47,6 +47,20 @@ try {
   await handlers.agent_settled({aborted:true}, ctx);
   assert.equal(calls.at(-1).status, 'running');
 
+  // Do not split Markdown destinations at the old 110-character boundary.
+  const markdown = 'Готово: [0.3.4](https://example.com/' + 'a'.repeat(200) + ') опубликован.';
+  await handlers.before_agent_start({}, ctx);
+  await handlers.message_end({message:{role:'assistant', content:[{type:'text', text:markdown}], stopReason:'stop'}}, ctx);
+  await handlers.agent_settled({aborted:false}, ctx);
+  assert.equal(calls.at(-1).title, markdown);
+  const longUnicode = 'ёж👨‍👩‍👧‍👦'.repeat(2000);
+  await handlers.before_agent_start({}, ctx);
+  await handlers.message_end({message:{role:'assistant', content:[{type:'text', text:longUnicode}], stopReason:'stop'}}, ctx);
+  await handlers.agent_settled({aborted:false}, ctx);
+  assert.ok(Buffer.byteLength(calls.at(-1).title, 'utf8') <= 4096);
+  assert.ok(longUnicode.startsWith(calls.at(-1).title));
+  assert.ok(!calls.at(-1).title.includes('\uFFFD'));
+
   // In-process subagents only report requests for input.
   const child = { cwd: '/code/demo', sessionManager: { getSessionId: () => 'child-1', getSessionFile: () => '/tmp/sessions/run-0/session.jsonl' } };
   const beforeChild = calls.length;
