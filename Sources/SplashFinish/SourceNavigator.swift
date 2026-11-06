@@ -30,15 +30,19 @@ import SplashFinishCore
         }
         return nil
     }
-    static func open(_ event: AgentEvent, model: AppModel) {
+    /// True means the source link was accepted or the exact terminal pane was reached.
+    /// Merely activating an app is a fallback, not proof of reaching the right tab.
+    static func open(_ event: AgentEvent, model: AppModel, completion: @escaping (Bool) -> Void) {
         if let raw = event.source?.url, AgentEvent.isSafeSourceURL(raw), let url = URL(string: raw) {
-            if NSWorkspace.shared.open(url) { return }
+            if NSWorkspace.shared.open(url) { completion(true); return }
         }
         if let orca = event.source?.orca {
             OrcaNavigator.open(orca) { opened in
-                guard !opened else { return }
-                NSRunningApplication.runningApplications(withBundleIdentifier: OrcaSource.bundleID).first?.activate(options: [])
-                model.message = "The original Orca terminal is unavailable. No other project was selected."
+                if !opened {
+                    NSRunningApplication.runningApplications(withBundleIdentifier: OrcaSource.bundleID).first?.activate(options: [])
+                    model.message = "The original Orca terminal is unavailable. No other project was selected."
+                }
+                completion(opened)
             }
             return
         }
@@ -51,10 +55,11 @@ import SplashFinishCore
                 process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
                 process.terminationHandler = { process in
                     DispatchQueue.main.async {
-                        if process.terminationStatus == 0 {
-                            NSRunningApplication.runningApplications(withBundleIdentifier: "com.github.wez.wezterm").first?.activate(options: [])
+                        if process.terminationStatus == 0,
+                           NSRunningApplication.runningApplications(withBundleIdentifier: "com.github.wez.wezterm").first?.activate(options: []) == true {
+                            completion(true)
                         } else {
-                            activateApp(event, model: model)
+                            activateApp(event, model: model, completion: completion)
                         }
                     }
                 }
@@ -67,9 +72,10 @@ import SplashFinishCore
                 } catch { /* Fall back to activating the source app. */ }
             }
         }
-        activateApp(event, model: model)
+        activateApp(event, model: model, completion: completion)
     }
-    private static func activateApp(_ event: AgentEvent, model: AppModel) {
+    private static func activateApp(_ event: AgentEvent, model: AppModel, completion: (Bool) -> Void) {
+        defer { completion(false) }
         if let pid = event.source?.pid, let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated,
            let bundle = event.source?.bundleID, app.bundleIdentifier == bundle {
             if app.activate(options: [.activateAllWindows]) { return }

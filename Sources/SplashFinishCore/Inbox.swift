@@ -70,6 +70,13 @@ public struct Inbox: Codable, Equatable, Sendable {
         items.removeAll { $0.key == key }
         if items.isEmpty { snoozedUntil = nil }
     }
+    /// Consume only a successfully opened notification. Navigation can finish after
+    /// a newer event for the same task arrives; that newer card must stay in the inbox.
+    @discardableResult public mutating func completeSourceNavigation(_ event: AgentEvent, reachedExactSource: Bool) -> Bool {
+        guard reachedExactSource, items.first(where: { $0.key == event.key }) == event else { return false }
+        dismiss(key: event.key)
+        return true
+    }
     public mutating func clear() { items.removeAll(); snoozedUntil = nil }
     /// Dismiss everything except live keys, e.g. questions that are still connected.
     /// The per-item path stays in the caller because only it knows the open connections.

@@ -108,7 +108,14 @@ import SplashFinishCore
     func usePi(id: String) {
         let event = inbox.items.first { questionID(for: $0) == id }
         questionConnections[id]?.end()
-        if let event, event.source?.orca != nil { SourceNavigator.open(event, model: self) }
+        if let event, event.source?.orca != nil { openSource(event) }
+    }
+    func openSource(_ event: AgentEvent) {
+        SourceNavigator.open(event, model: self) { [weak self] reachedExactSource in
+            guard let self, self.inbox.completeSourceNavigation(event, reachedExactSource: reachedExactSource) else { return }
+            self.selection.reconcile(keys: self.orderedKeys)
+            self.persist(); self.scheduleWake(); self.onChange?(false)
+        }
     }
     func questionID(for event: AgentEvent) -> String? {
         guard event.agent.lowercased() == "pi", let id = QuestionTask.id(fromTask: event.task) else { return nil }

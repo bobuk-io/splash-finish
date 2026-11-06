@@ -65,7 +65,7 @@ private final class SplashPanel: NSPanel {
         panel.contentView = NSHostingView(rootView: PanelView(model: model,
             onOpen: { [weak self] event in
                 guard let self else { return }
-                SourceNavigator.open(event, model: self.model)
+                self.model.openSource(event)
             }, onSize: { [weak self] size in
                 DispatchQueue.main.async { self?.resize(to: size) }
             }))
@@ -164,7 +164,7 @@ private final class SplashPanel: NSPanel {
         case .previous: model.moveSelection(-1)
         case .next: model.moveSelection(1)
         case .open:
-            if let event = model.selectedEvent { SourceNavigator.open(event, model: model) }
+            if let event = model.selectedEvent { model.openSource(event) }
         }
         return true
     }
