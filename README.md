@@ -146,6 +146,8 @@ SPLASH_FINISH_GUI_TESTS=1 python3 -m unittest discover -s Tests -p test_app_smok
 
 `Package.swift` builds a SwiftUI/AppKit app and a separate testable core, with the pinned Sparkle binary dependency. `Scripts/package_app.sh` assembles the `.app`; no Xcode project is required. `install.py` is a standalone standard-library installer. Tests use temporary directories and do not alter your agent configs.
 
+The app icon is **Landing Signal** (three raised amber bars on slate). Editable artwork and native-size PNGs live in [`Assets/AppIcon`](Assets/AppIcon/README.md); the build packages them into `Icon.icns` using macOS tools only. The menu-bar symbol remains monochrome.
+
 `version.env` is the single source of truth for the release version: `Scripts/package_app.sh` embeds it in `Info.plist`, the app reads it back for `--version`, and CI verifies the built bundle against the file.
 
 Create a **universal** release with an available Developer ID identity:

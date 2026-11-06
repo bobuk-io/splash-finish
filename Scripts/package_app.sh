@@ -34,13 +34,9 @@ APP="$ROOT/build/Splash Finish.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 
-# Convert Icon.icon to Icon.icns if present (requires iconutil).
-ICON_SOURCE="$ROOT/Icon.icon"
+# Package the approved artwork from Assets/AppIcon (macOS tools only).
 ICON_TARGET="$ROOT/build/Icon.icns"
 swift "$ROOT/Scripts/render_icon.swift"
-if [[ -f "$ICON_SOURCE" ]]; then
-  iconutil --convert icns --output "$ICON_TARGET" "$ICON_SOURCE"
-fi
 
 LSUI_VALUE="false"
 if [[ "$MENU_BAR_APP" == "1" ]]; then

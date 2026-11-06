@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Landing Signal — Splash Finish app icon</title>
+  <defs>
+    <linearGradient id="slate" x1="0" y1="0" x2=".85" y2="1">
+      <stop stop-color="#40565a"/><stop offset=".45" stop-color="#273b40"/><stop offset="1" stop-color="#14272e"/>
+    </linearGradient>
+    <radialGradient id="tile-light" cx=".22" cy="0" r="1">
+      <stop stop-color="#b2c9bb" stop-opacity=".15"/><stop offset=".8" stop-color="#b2c9bb" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2=".8" y2="1">
+      <stop stop-color="#d9e5d9" stop-opacity=".5"/><stop offset=".42" stop-color="#c0d5cf" stop-opacity=".08"/><stop offset="1" stop-color="#92b0af" stop-opacity=".27"/>
+    </linearGradient>
+    <linearGradient id="amber" x1="0" y1="0" x2=".88" y2=".9">
+      <stop stop-color="#fff0c0"/><stop offset=".25" stop-color="#f5ce84"/><stop offset=".7" stop-color="#dfa34e"/><stop offset="1" stop-color="#b9762f"/>
+    </linearGradient>
+    <linearGradient id="foil" x1="0" y1="0" x2="1" y2="0">
+      <stop stop-color="#fff6d6" stop-opacity=".6"/><stop offset=".32" stop-color="#fff6d6" stop-opacity="0"/><stop offset=".8" stop-color="#804714" stop-opacity="0"/><stop offset="1" stop-color="#804714" stop-opacity=".17"/>
+    </linearGradient>
+    <filter id="cast" x="-70%" y="-30%" width="240%" height="180%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="16" stdDeviation="12" flood-color="#061316" flood-opacity=".58"/>
+    </filter>
+    <filter id="bloom" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="44"/></filter>
+    <clipPath id="tile"><rect x="64" y="64" width="896" height="896" rx="202"/></clipPath>
+  </defs>
+  <g id="slate-ceramic-base">
+    <rect x="64" y="64" width="896" height="896" rx="202" fill="url(#slate)"/>
+    <rect x="64" y="64" width="896" height="896" rx="202" fill="url(#tile-light)"/>
+    <rect x="66" y="66" width="892" height="892" rx="200" fill="none" stroke="url(#rim)" stroke-width="2"/>
+    <rect x="74" y="74" width="876" height="876" rx="195" fill="none" stroke="#dbeadd" stroke-opacity=".045" stroke-width="4"/>
+  </g>
+  <g id="reflected-light" clip-path="url(#tile)">
+    <ellipse cx="515" cy="596" rx="249" ry="220" fill="#edb865" opacity=".055" filter="url(#bloom)"/>
+  </g>
+  <g id="three-arrivals" filter="url(#cast)">
+    <g id="low-signal">
+      <rect x="274" y="508" width="120" height="250" rx="60" fill="#965e2e"/>
+      <rect x="274" y="500" width="120" height="250" rx="60" fill="url(#amber)"/>
+      <rect x="274" y="500" width="120" height="250" rx="60" fill="url(#foil)"/>
+      <rect x="276" y="502" width="116" height="246" rx="58" fill="none" stroke="#ffe8b2" stroke-opacity=".32" stroke-width="2"/>
+    </g>
+    <g id="long-signal">
+      <rect x="452" y="278" width="120" height="480" rx="60" fill="#965e2e"/>
+      <rect x="452" y="270" width="120" height="480" rx="60" fill="url(#amber)"/>
+      <rect x="452" y="270" width="120" height="480" rx="60" fill="url(#foil)"/>
+      <rect x="454" y="272" width="116" height="476" rx="58" fill="none" stroke="#ffe8b2" stroke-opacity=".38" stroke-width="2"/>
+    </g>
+    <g id="high-signal">
+      <rect x="630" y="278" width="120" height="250" rx="60" fill="#965e2e"/>
+      <rect x="630" y="270" width="120" height="250" rx="60" fill="url(#amber)"/>
+      <rect x="630" y="270" width="120" height="250" rx="60" fill="url(#foil)"/>
+      <rect x="632" y="272" width="116" height="246" rx="58" fill="none" stroke="#ffe8b2" stroke-opacity=".32" stroke-width="2"/>
+    </g>
+  </g>
+</svg>
