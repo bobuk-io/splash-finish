@@ -1,11 +1,16 @@
 name: CI
 on:
   push:
+    # The branch commit is already tested before its release tag is published.
+    branches: ['**']
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
-    runs-on: macos-15
+    # macos-15 defaults to arm64, whose hosted pool has failed to acquire a
+    # runner for this repo. Keep universal cross-compilation on the Intel pool.
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,6 +30,8 @@ jobs:
         run: |
           codesign --verify --deep --strict 'build/Splash Finish.app'
           lipo 'build/Splash Finish.app/Contents/MacOS/SplashFinish' -verify_arch arm64 x86_64
+          cmp build/Icon.icns 'build/Splash Finish.app/Contents/Resources/Icon.icns'
+          test "$(plutil -extract CFBundleIconFile raw 'build/Splash Finish.app/Contents/Info.plist')" = Icon
           source version.env
           test "$(plutil -extract CFBundleShortVersionString raw 'build/Splash Finish.app/Contents/Info.plist')" = "$MARKETING_VERSION"
           test "$(plutil -extract CFBundleVersion raw 'build/Splash Finish.app/Contents/Info.plist')" = "$BUILD_NUMBER"
