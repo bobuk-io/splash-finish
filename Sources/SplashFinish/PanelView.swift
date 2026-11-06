@@ -171,7 +171,7 @@ private struct NotificationRow: View {
             }
             Rectangle().fill(.white.opacity(0.12)).frame(height: 1).padding(.top, 17)
             HStack {
-                Button(action: model.snooze) {
+                Button { model.snooze() } label: {
                     HStack(spacing: 7) {
                         Image(systemName: "moon.zzz")
                         Text("Snooze")

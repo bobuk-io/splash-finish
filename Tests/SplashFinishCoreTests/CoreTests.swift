@@ -70,6 +70,36 @@ final class InboxTests: XCTestCase {
         try inbox.receive(AgentEvent(task: "s", agent: "Codex", status: .running, title: "Working"))
         XCTAssertTrue(inbox.items.isEmpty)
     }
+    func testAgentKeysAreNormalized() throws {
+        var inbox = Inbox()
+        try inbox.receive(AgentEvent(task: "s", agent: "Claude Code", status: .done, title: "x"))
+        XCTAssertEqual(inbox.lastEvents?.keys.sorted(), ["claudecode"])
+        XCTAssertEqual(Inbox.agentKey(" Claude  Code "), "claudecode")
+    }
+    func testQuestionPlaceholdersAndSelectiveClear() throws {
+        var inbox = Inbox()
+        let question = AgentEvent(task: QuestionTask.prefix + "abc", agent: "pi", status: .attention, title: "Question")
+        try inbox.receive(question)
+        try inbox.receive(AgentEvent(task: "keep", agent: "pi", status: .attention, title: "Ordinary"))
+        inbox.dismissAll(except: [question.key])
+        XCTAssertEqual(inbox.items.map(\.task), [question.task])
+        inbox.discardQuestionPlaceholders()
+        XCTAssertTrue(inbox.items.isEmpty)
+        XCTAssertNil(inbox.snoozedUntil)
+        XCTAssertEqual(QuestionTask.id(fromTask: "question-abc"), "abc")
+        XCTAssertNil(QuestionTask.id(fromTask: "other"))
+    }
+    func testSnoozeDurationAndMorningDeadline() throws {
+        var inbox = Inbox()
+        try inbox.receive(event())
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        inbox.snooze(now: now, duration: 3600)
+        XCTAssertEqual(inbox.snoozedUntil, now.addingTimeInterval(3600))
+        let morning = Snooze.untilTomorrowMorning(now: now)
+        XCTAssertGreaterThanOrEqual(morning, 60)
+        inbox.snooze(now: now, duration: morning)
+        XCTAssertEqual(inbox.snoozedUntil, now.addingTimeInterval(morning))
+    }
     func testLegacyInboxDecodesWithoutOrderingMetadata() throws {
         let old = Data(#"{"items":[],"seenEventIDs":[]}"#.utf8)
         let inbox = try JSONDecoder().decode(Inbox.self, from: old)
@@ -202,14 +232,41 @@ final class FilesAndInstallerTests: XCTestCase {
     }
     func testDoctorDetectsInstallOutdatedAndLastEvent() throws {
         var inbox = Inbox()
-        XCTAssertEqual(installer.inspect(inbox: inbox).map(\.state), ["not installed", "not installed", "not installed"])
+        XCTAssertEqual(installer.inspect(inbox: inbox).map(\.state), [.notInstalled, .notInstalled, .notInstalled])
         _ = try installer.run(install: true, agents: [.pi])
         try inbox.receive(AgentEvent(task: "s", agent: "pi", status: .done, title: "done"))
         let installed = installer.inspect(inbox: inbox).last!
-        XCTAssertEqual(installed.state, "installed"); XCTAssertNotNil(installed.lastEvent)
+        XCTAssertEqual(installed.state, .installed); XCTAssertNotNil(installed.lastEvent)
+        // Display-name variants of an agent map to the same last-event record.
+        try inbox.receive(AgentEvent(task: "c", agent: "Claude Code", status: .done, title: "done"))
+        XCTAssertNotNil(installer.inspect(inbox: inbox).first { $0.agent == .claude }?.lastEvent)
         let skill = home.appendingPathComponent(".pi/agent/skills/splash-finish/SKILL.md")
         try Data("<!-- Managed by Splash Finish --> old".utf8).write(to: skill)
-        XCTAssertEqual(installer.inspect(inbox: inbox).last?.state, "update available")
+        XCTAssertEqual(installer.inspect(inbox: inbox).last?.state, .updateAvailable)
+    }
+    func testBackupRotationKeepsNewestThree() throws {
+        let url = home.appendingPathComponent(".codex/hooks.json")
+        _ = try installer.run(install: true, agents: [.codex])
+        for _ in 0..<5 {
+            var config = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+            var hooks = config["hooks"] as! [String: Any]
+            hooks.removeValue(forKey: "SessionEnd") // A required event; patch re-adds it and must back up first.
+            config["hooks"] = hooks
+            try SafeFiles.write(JSONSerialization.data(withJSONObject: config), to: url)
+            _ = try installer.run(install: true, agents: [.codex])
+        }
+        let backups = try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent(".codex").path)
+            .filter { $0.hasPrefix("hooks.json.splash-finish-backup-") }
+        XCTAssertEqual(backups.count, 3)
+    }
+    func testFocusStatusReadsAssertionsDatabase() throws {
+        let database = home.appendingPathComponent("Library/DoNotDisturb/DB/Assertions.json")
+        try SafeFiles.write(Data(#"{"data":[{}]}"#.utf8), to: database)
+        XCTAssertFalse(FocusStatus.isDoNotDisturbActive(home: home))
+        try SafeFiles.write(Data(#"{"data":[{"storeAssertionRecords":[{"assertionDetails":{}}]}]}"#.utf8), to: database)
+        XCTAssertTrue(FocusStatus.isDoNotDisturbActive(home: home))
+        try FileManager.default.removeItem(at: database)
+        XCTAssertFalse(FocusStatus.isDoNotDisturbActive(home: home))
     }
     func testInvalidConfigPreflightDoesNotWriteOtherFiles() throws {
         let url = home.appendingPathComponent(".codex/hooks.json")

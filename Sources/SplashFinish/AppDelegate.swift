@@ -36,6 +36,8 @@ private final class SplashPanel: NSPanel {
     private var panelSize = CGSize(width: 470, height: 350)
     private var integrationsWindow: NSWindow?
     private var updater: SPUStandardUpdaterController?
+    private var hotKey: GlobalHotKey?
+    private var startAtLoginItem: NSMenuItem?
     private var pendingURLs = [URL]()
     private var observers = [NSObjectProtocol]()
 
@@ -69,6 +71,7 @@ private final class SplashPanel: NSPanel {
             }))
         model.onChange = { [weak self] reveal in self?.update(reveal: reveal) }
         updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+        hotKey = GlobalHotKey { [weak self] in self?.model.show() }
         makeMenu()
         update(reveal: !model.items.isEmpty && !model.isSnoozed)
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.offerIntegrationUpdates() }
@@ -93,6 +96,7 @@ private final class SplashPanel: NSPanel {
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationWillTerminate(_ notification: Notification) {
+        model?.flush()
         for observer in observers {
             NotificationCenter.default.removeObserver(observer)
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
@@ -164,6 +168,15 @@ private final class SplashPanel: NSPanel {
         }
         return true
     }
+    @discardableResult
+    private func menuItem(_ title: String, _ selector: Selector, _ key: String = "",
+                          _ modifiers: NSEvent.ModifierFlags = .command, in menu: NSMenu) -> NSMenuItem {
+        let entry = NSMenuItem(title: title, action: selector, keyEquivalent: key)
+        entry.keyEquivalentModifierMask = modifiers
+        entry.target = self
+        menu.addItem(entry)
+        return entry
+    }
     private func makeMenu() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         let image = NSImage(size: NSSize(width: 22, height: 22), flipped: false) { rect in
@@ -179,28 +192,39 @@ private final class SplashPanel: NSPanel {
         statusItem.button?.toolTip = "Splash Finish"
         statusItem.button?.setAccessibilityLabel("Splash Finish notifications")
         let menu = NSMenu()
-        func item(_ title: String, _ selector: Selector, _ key: String = "") {
-            let entry = NSMenuItem(title: title, action: selector, keyEquivalent: key)
-            entry.target = self; menu.addItem(entry)
+        // The same shortcut is registered globally below; the menu item keeps it discoverable.
+        menuItem("Show Inbox", #selector(showInbox), "s", [.command, .option], in: menu)
+        let snoozeMenu = NSMenu()
+        for (title, seconds) in [("15 Minutes", 15.0 * 60), ("1 Hour", 3600.0)] {
+            let entry = menuItem(title, #selector(snoozeFor(_:)), in: snoozeMenu)
+            entry.representedObject = seconds
         }
-        item("Show Inbox", #selector(showInbox), "0")
-        item("Snooze for 15 Minutes", #selector(snooze), "s")
-        item("Clear All Notifications", #selector(clear), "w")
+        menuItem("Until Tomorrow Morning", #selector(snoozeUntilMorning), in: snoozeMenu)
+        let snoozeItem = NSMenuItem(title: "Snooze", action: nil, keyEquivalent: "")
+        snoozeItem.submenu = snoozeMenu
+        menu.addItem(snoozeItem)
+        menuItem("Clear All Notifications", #selector(clear), "w", in: menu)
         menu.addItem(.separator())
-        item("Send Test Notification", #selector(testNotification), "t")
-        item("Integrations…", #selector(showIntegrations), "i")
-        item("Install Agent Skills…", #selector(installSkills))
-        item("Uninstall Agent Skills…", #selector(uninstallSkills))
-        item("Start at Login", #selector(toggleLogin))
-        menu.items.last?.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        menuItem("Send Test Notification", #selector(testNotification), "t", in: menu)
+        menuItem("Integrations…", #selector(showIntegrations), "i", in: menu)
+        menuItem("Install Agent Skills…", #selector(installSkills), in: menu)
+        menuItem("Uninstall Agent Skills…", #selector(uninstallSkills), in: menu)
+        startAtLoginItem = menuItem("Start at Login", #selector(toggleLogin), in: menu)
+        startAtLoginItem?.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        let focusItem = menuItem("Respect Do Not Disturb", #selector(toggleRespectFocus), in: menu)
+        focusItem.state = model.respectFocus ? .on : .off
         menu.addItem(.separator())
-        item("Check for Updates…", #selector(checkForUpdates))
-        item("About Splash Finish", #selector(about))
-        item("Quit Splash Finish", #selector(quit), "q")
+        menuItem("Check for Updates…", #selector(checkForUpdates), in: menu)
+        menuItem("About Splash Finish", #selector(about), in: menu)
+        menuItem("Quit Splash Finish", #selector(quit), "q", in: menu)
         statusItem.menu = menu
     }
     @objc private func showInbox() { model.show() }
-    @objc private func snooze() { model.snooze() }
+    @objc private func snoozeFor(_ sender: NSMenuItem) {
+        guard let seconds = sender.representedObject as? TimeInterval else { return }
+        model.snooze(duration: seconds)
+    }
+    @objc private func snoozeUntilMorning() { model.snooze(duration: Snooze.untilTomorrowMorning()) }
     @objc private func clear() { model.clear() }
     @objc private func quit() { NSApp.terminate(nil) }
     @objc private func testNotification() {
@@ -211,16 +235,18 @@ private final class SplashPanel: NSPanel {
     @objc private func about() {
         NSApp.activate()
         NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "Splash Finish",
-                                                    .applicationVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0",
+                                                    .applicationVersion: CLI.version,
                                                     .credits: NSAttributedString(string: "One question. Two results. One window.\ngithub.com/bobuk-io/splash-finish")])
     }
     private func offerIntegrationUpdates() {
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? CLI.version
-        let key = "integrationUpdateOfferVersion"
-        guard UserDefaults.standard.string(forKey: key) != version,
+        // Hooks embed the absolute binary path, so moving the .app or updating the app
+        // leaves stale integrations behind. Offer once per version and location.
+        let signature = CLI.version + "|" + CLI.executable
+        let key = "integrationUpdateOfferSignature"
+        guard UserDefaults.standard.string(forKey: key) != signature,
               let statuses = try? CLI.integrationInstaller().inspect(inbox: model.inbox),
-              statuses.contains(where: { $0.state == "update available" }) else { return }
-        UserDefaults.standard.set(version, forKey: key)
+              statuses.contains(where: { $0.state == .updateAvailable }) else { return }
+        UserDefaults.standard.set(signature, forKey: key)
         let alert = NSAlert()
         alert.messageText = "Agent integrations can be updated"
         alert.informativeText = "Splash Finish found older integrations. Review them before updating; Codex may require hook trust again."
@@ -256,7 +282,7 @@ private final class SplashPanel: NSPanel {
         if install {
             if let statuses = try? CLI.integrationInstaller().inspect(inbox: model.inbox),
                let pi = statuses.first(where: { $0.agent == .pi }),
-               pi.richQuestionsEnabled || (pi.state == "not installed" && piAsk) { richQuestions.state = .on }
+               pi.richQuestionsEnabled || (pi.state == .notInstalled && piAsk) { richQuestions.state = .on }
             richQuestions.toolTip = "Uses pi-agent-ask's public integration events."
             if !piAsk { alert.informativeText += "\n\npi-agent-ask was not detected globally. Install it with: pi install npm:pi-agent-ask. Project-local installations may still work." }
             alert.accessoryView = richQuestions
@@ -270,6 +296,11 @@ private final class SplashPanel: NSPanel {
         } catch { model.report(error); model.show() }
     }
     @objc private func toggleLogin() {
-        LoginItem.toggle(model: model, menu: statusItem.menu)
+        LoginItem.toggle(model: model, item: startAtLoginItem)
+    }
+    @objc private func toggleRespectFocus(_ sender: NSMenuItem) {
+        model.respectFocus.toggle()
+        UserDefaults.standard.set(model.respectFocus, forKey: "respectFocus")
+        sender.state = model.respectFocus ? .on : .off
     }
 }

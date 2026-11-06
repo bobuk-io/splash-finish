@@ -114,7 +114,7 @@ private struct PiQuestionItemView: View {
             if let context = question.context, !context.isEmpty {
                 Text(context).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
-            ForEach(question.options) { option in
+            ForEach(Array(question.options.enumerated()), id: \.element.id) { index, option in
                 Button {
                     if question.type == "multi" {
                         if draft.values.contains(option.value) { draft.values.remove(option.value) } else { draft.values.insert(option.value) }
@@ -129,6 +129,9 @@ private struct PiQuestionItemView: View {
                         Spacer()
                     }.contentShape(Rectangle())
                 }.buttonStyle(.plain)
+                    // ⌘1…⌘9 select options without stealing plain digits from text fields.
+                    .keyboardShortcut(index < 9 ? KeyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command) : nil)
+                    .help(index < 9 ? "\(option.label) (⌘\(index + 1))" : option.label)
                 if draft.values.contains(option.value) {
                     TextField("Option note (optional)", text: Binding(get: { draft.optionNotes[option.value] ?? "" }, set: { draft.optionNotes[option.value] = $0 }))
                         .textFieldStyle(.roundedBorder).padding(.leading, 20)
@@ -181,6 +184,8 @@ struct PiQuestionView: View {
                     }
                     submit(["kind": "answer", "answers": answers])
                 }.disabled(!canSubmit || submitting)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .help("Submit the answers to pi (⌘⏎)")
             }
         }.padding(12).background(.white.opacity(0.05), in: .rect(cornerRadius: 8))
     }

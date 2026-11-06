@@ -16,14 +16,14 @@ import SplashFinishCore
 }
 
 @MainActor enum LoginItem {
-    static func toggle(model: AppModel, menu: NSMenu?) {
+    static func toggle(model: AppModel, item: NSMenuItem?) {
         do {
             if SMAppService.mainApp.status == .enabled { try SMAppService.mainApp.unregister() }
             else {
                 try SMAppService.mainApp.register()
                 if SMAppService.mainApp.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
             }
-            menu?.items.first(where: { $0.title == "Start at Login" })?.state = SMAppService.mainApp.status == .enabled ? .on : .off
+            item?.state = SMAppService.mainApp.status == .enabled ? .on : .off
         } catch { model.report(error); model.show() }
     }
 }

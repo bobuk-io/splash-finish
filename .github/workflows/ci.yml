@@ -17,9 +17,14 @@ jobs:
         run: python3 -m unittest discover -s Tests -v
       - name: Pi extension lifecycle
         run: node Tests/pi-extension.test.mjs
+      - name: Rich pi question lifecycle
+        run: node Tests/pi-questions.test.mjs
       - name: Build universal app
         run: SIGNING_MODE=adhoc ARCHES='arm64 x86_64' Scripts/package_app.sh release
-      - name: Verify app and architectures
+      - name: Verify app, architectures and embedded version
         run: |
           codesign --verify --deep --strict 'build/Splash Finish.app'
           lipo 'build/Splash Finish.app/Contents/MacOS/SplashFinish' -verify_arch arm64 x86_64
+          source version.env
+          test "$(plutil -extract CFBundleShortVersionString raw 'build/Splash Finish.app/Contents/Info.plist')" = "$MARKETING_VERSION"
+          test "$(plutil -extract CFBundleVersion raw 'build/Splash Finish.app/Contents/Info.plist')" = "$BUILD_NUMBER"

@@ -15,6 +15,7 @@ import SplashFinishCore
     @ObservationIgnored var onChange: ((Bool) -> Void)?
     @ObservationIgnored private let state: StateFile
     @ObservationIgnored private var timer: Timer?
+    @ObservationIgnored private var persistTimer: Timer?
     @ObservationIgnored private let logger = Logger(subsystem: AppPaths.bundleID, category: "inbox")
 
     init() {
@@ -30,9 +31,7 @@ import SplashFinishCore
             }
         }
         // Connections are ephemeral; discard stale placeholders after an app restart.
-        for event in inbox.items where event.agent.lowercased() == "pi" && event.task.hasPrefix("question-") {
-            inbox.dismiss(key: event.key)
-        }
+        inbox.discardQuestionPlaceholders()
         selection.reconcile(keys: orderedKeys)
         scheduleWake()
     }
@@ -52,10 +51,21 @@ import SplashFinishCore
 
     func receive(_ event: AgentEvent) {
         do {
-            let reveal = try inbox.receive(event)
+            let received = try inbox.receive(event)
             selection.reconcile(keys: orderedKeys)
-            persist(); scheduleWake(); onChange?(reveal)
+            persist(); scheduleWake(); onChange?(shouldReveal(received))
         } catch { report(error) }
+    }
+    var respectFocus = UserDefaults.standard.object(forKey: "respectFocus") as? Bool ?? true
+    @ObservationIgnored private var focusCache: (checked: Date, active: Bool)?
+    /// While Do Not Disturb is on the event still lands in the inbox and updates the
+    /// badge, but the panel does not open until the user asks for it.
+    private func shouldReveal(_ received: Bool) -> Bool {
+        guard received, respectFocus else { return received }
+        if let cache = focusCache, Date().timeIntervalSince(cache.checked) < 5 { return !cache.active }
+        let active = FocusStatus.isDoNotDisturbActive()
+        focusCache = (Date(), active)
+        return !active
     }
     func openQuestion(id: String) {
         guard questionConnections[id] == nil, let connection = QuestionConnection(id: id) else { return }
@@ -96,8 +106,7 @@ import SplashFinishCore
     }
     func usePi(id: String) { questionConnections[id]?.end() }
     func questionID(for event: AgentEvent) -> String? {
-        guard event.agent.lowercased() == "pi", event.task.hasPrefix("question-") else { return nil }
-        let id = String(event.task.dropFirst("question-".count))
+        guard event.agent.lowercased() == "pi", let id = QuestionTask.id(fromTask: event.task) else { return nil }
         return questions[id] == nil ? nil : id
     }
     func dismiss(_ event: AgentEvent) {
@@ -107,17 +116,32 @@ import SplashFinishCore
     }
     func clear() {
         // Pending questions remain visible: clearing a notification must not strand an agent.
-        for event in inbox.items where questionID(for: event) == nil { inbox.dismiss(key: event.key) }
+        let keep = Set(inbox.items.compactMap { event in questionID(for: event).map { _ in event.key } })
+        inbox.dismissAll(except: keep)
         selection.reconcile(keys: orderedKeys)
         persist(); scheduleWake(); onChange?(false)
     }
-    func snooze() { inbox.snooze(); persist(); scheduleWake(); onChange?(false) }
+    func snooze(duration: TimeInterval = 15 * 60) {
+        inbox.snooze(duration: duration); persist(); scheduleWake(); onChange?(false)
+    }
     func show() { inbox.reveal(); persist(); scheduleWake(); onChange?(true) }
     func report(_ error: Error) {
         message = error.localizedDescription
         logger.error("\(error.localizedDescription, privacy: .public)")
     }
+    /// Coalesce bursts of tool-progress events into a single state write; the file is
+    /// small, but a synchronous write on every hook event is wasted I/O.
     private func persist() {
+        persistTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.3, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.flush() }
+        }
+        persistTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+    /// Write immediately, e.g. before the app terminates.
+    func flush() {
+        persistTimer?.invalidate(); persistTimer = nil
         do { try state.save(inbox) } catch { report(error) }
     }
     private func scheduleWake() {
@@ -126,7 +150,7 @@ import SplashFinishCore
         timer = Timer.scheduledTimer(withTimeInterval: max(0.05, date.timeIntervalSinceNow), repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                if self.inbox.wakeIfDue() { self.persist(); self.onChange?(true) }
+                if self.inbox.wakeIfDue() { self.persist(); self.onChange?(self.shouldReveal(true)) }
                 else { self.scheduleWake() }
             }
         }

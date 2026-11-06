@@ -2,7 +2,10 @@ import AppKit
 import SplashFinishCore
 
 @MainActor enum CLI {
-    static let version = "0.3.0"
+    /// Single source of truth is version.env, injected into Info.plist by package_app.sh.
+    static var version: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0-dev"
+    }
     static let help = """
     Splash Finish \(version) — a landing strip for your AI agents
 
@@ -12,7 +15,7 @@ import SplashFinishCore
       notify                       Send an agent event (see options below)
       snooze                       Hide until the next event or for 15 minutes
       clear                        Dismiss every notification and hide
-      status                       Print the persisted inbox as JSON
+      status [--raw]               Summarize the inbox, or print full JSON with --raw
       doctor                       Diagnose agent integrations
       install-skills               Install agent skills, hooks and pi extension
       uninstall-skills             Remove only Splash Finish integrations
@@ -42,12 +45,16 @@ import SplashFinishCore
 
     struct Options {
         var values = [String: String]()
-        init(_ args: ArraySlice<String>, allowed: Set<String>) throws {
+        init(_ args: ArraySlice<String>, allowed: Set<String>, flags: Set<String> = []) throws {
             var index = args.startIndex
             while index < args.endIndex {
                 let key = args[index]
                 guard key.hasPrefix("--"), allowed.contains(key) else { throw EventError.invalid("Unknown option: \(key)") }
                 if key == "--managed-splash-finish" { index += 1; continue }
+                if flags.contains(key) {
+                    guard values[key] == nil else { throw EventError.invalid("Repeated option: \(key)") }
+                    values[key] = "true"; index += 1; continue
+                }
                 guard index + 1 < args.endIndex, values[key] == nil else {
                     throw EventError.invalid("Missing or repeated value for \(key)")
                 }
@@ -80,6 +87,11 @@ import SplashFinishCore
         try process.run(); process.waitUntilExit()
         guard process.terminationStatus == 0 else { throw EventError.invalid("Could not contact Splash Finish. Install and open Splash Finish.app first.") }
     }
+    /// Cheap read of the persisted inbox; used to skip no-op hook work.
+    private static func hasInboxEntry(_ key: String) -> Bool {
+        guard let inbox = try? StateFile(url: AppPaths.state).load() else { return false }
+        return inbox.items.contains { $0.key == key }
+    }
     static func run(_ args: [String]) -> Int32 {
         guard let command = args.first else { return 0 }
         // Hook output must never deny tools, alter prompts or fail the agent's run.
@@ -91,8 +103,14 @@ import SplashFinishCore
                     input.append(chunk)
                     if input.count > 1_048_576 { print("{}"); return 0 }
                 }
-                if let event = try HookEvent.parse(agent: args[1], input: input, source: SourceNavigator.capture()) {
-                    try send(DeepLink.eventURL(event))
+                if var event = try HookEvent.parse(agent: args[1], input: input) {
+                    // Claude Code and Codex run a hook on every tool call. A progress event
+                    // only clears an existing "working" entry, so skip the process inspection
+                    // and the deep link entirely when the inbox has nothing to clear.
+                    if event.status != .running || event.phase != "progress" || hasInboxEntry(event.key) {
+                        event.source = SourceNavigator.capture()
+                        try send(DeepLink.eventURL(event))
+                    }
                 }
             } catch { /* Best effort. Nothing agent-facing, no transcript or secret logging. */ }
             print("{}")
@@ -106,17 +124,28 @@ import SplashFinishCore
                 guard args.count == 1 else { throw EventError.invalid("\(command) takes no arguments") }
                 try send(URL(string: "\(DeepLink.scheme)://\(command)")!)
             case "status":
-                guard args.count == 1 else { throw EventError.invalid("status takes no arguments") }
+                let options = try Options(args.dropFirst(), allowed: ["--raw"], flags: ["--raw"])
                 let state = try StateFile(url: AppPaths.state).load()
-                let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-                print(String(decoding: try encoder.encode(state), as: UTF8.self))
+                if options["raw"] != nil {
+                    let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                    print(String(decoding: try encoder.encode(state), as: UTF8.self))
+                } else {
+                    let formatter = ISO8601DateFormatter()
+                    print("attention: \(state.attention.count)  completed: \(state.completed.count)  snoozed: \(state.snoozedUntil.map { formatter.string(from: $0) } ?? "no")")
+                    // Newest first, matching how the panel groups attention before completed.
+                    for event in (state.attention + state.completed).reversed() {
+                        print([event.status.rawValue, event.agent, event.project, event.title]
+                            .filter { !$0.isEmpty }.joined(separator: " | "))
+                    }
+                    if !state.items.isEmpty { print("Use --raw for the full JSON state.") }
+                }
             case "doctor":
                 guard args.count == 1 else { throw EventError.invalid("doctor takes no arguments") }
                 let inbox = try StateFile(url: AppPaths.state).load()
                 let statuses = try integrationInstaller().inspect(inbox: inbox)
                 let formatter = ISO8601DateFormatter()
                 for item in statuses {
-                    print("\(item.agent.rawValue): \(item.state)")
+                    print("\(item.agent.rawValue): \(item.state.rawValue)")
                     print("  \(item.detail)")
                     if item.agent == .pi {
                         print(item.piAskDetected ? "  pi-agent-ask detected; run install-skills to enable rich questions." : "  pi-agent-ask not detected globally; install: pi install npm:pi-agent-ask (project-local installs may still work).")

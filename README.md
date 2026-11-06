@@ -35,15 +35,18 @@ The three bars in your menu bar are Splash Finish. One floating panel is shared 
 
 - **Needs attention** appears above **Completed**. A new result expands the same window; a long list scrolls.
 - **×** dismisses one notification. **Clear all** clears the list and hides the panel.
-- **Snooze** hides the panel for 15 minutes or until a genuinely new event arrives, whichever comes first. The inbox is retained, including across app restarts.
+- **Snooze** hides the panel for 15 minutes or until a genuinely new event arrives, whichever comes first. The menu bar offers 15 minutes, 1 hour, or until tomorrow morning. The inbox is retained, including across app restarts.
 - Click a row to return to its source when possible. A supplied session link is preferred; WezTerm pane IDs are captured when available. If exact navigation fails, Splash Finish activates the originating app. Other terminals do not guarantee the original tab or window can be selected.
-- Use the menu bar to reopen the inbox, send a test notification, install integrations, or enable **Start at Login**. When the panel appears, it takes keyboard focus: `Esc` snoozes, `Backspace` (or `⌘W`) clears all, `↑` / `↓` select a notification, and `Return` opens its source. A new notification in an already-visible panel does not steal focus back if you switched away.
+- The inbox keeps at most the 200 most recent notifications; when it overflows, the oldest entries are dropped even if they were asking for attention.
+- Use the menu bar to reopen the inbox, send a test notification, install integrations, or enable **Start at Login**. **Respect Do Not Disturb** hides automatic reveals while macOS Focus is on; events still land in the inbox and update the badge, and an explicit `show` always opens it. When the panel appears, it takes keyboard focus: `Esc` snoozes, `Backspace` (or `⌘W`) clears all, `↑` / `↓` select a notification, and `Return` opens its source. A new notification in an already-visible panel does not steal focus back if you switched away.
+- `⌥⌘S` opens the inbox from anywhere, even when Splash Finish is not the active app.
 
 ```sh
 splash-finish show
 splash-finish snooze
 splash-finish clear
-splash-finish status             # local inbox as JSON
+splash-finish status             # short summary of the local inbox
+splash-finish status --raw       # full inbox state as JSON
 splash-finish doctor             # integration status, repair hints and last event
 splash-finish --help
 ```
@@ -88,19 +91,21 @@ splash-finish uninstall-skills --agent codex
 | Codex | user skill and `~/.codex/hooks.json` hooks | `Stop` and `PermissionRequest`; `/hooks` trust required |
 | pi | user skill and `~/.pi/agent/extensions/splash-finish.ts` | settled, extension UI prompts, common question tools, errors and interruption |
 
+Pi notifications are fire-and-forget and never delay the agent. Subagent sessions (pi-subagents background children and in-process `run-N` sessions) are filtered: only requests for input are forwarded, so a fan-out of workers does not flood the inbox.
+
 Completions mean **the agent stopped responding**, not that its claims or tests were independently verified. Agent hook APIs and external tools vary by version; not every possible request for input is observable. Background agents, remote containers and hosts that do not expose the local macOS app may need to send events explicitly. Claude Code can emit the sandbox network permission notification after a delay. Other installed hooks may change agent behavior after a `Stop` event; Splash Finish is only an observer and cannot predict subsequent continuation.
 
 Open **Integrations…** in the menu bar or run `splash-finish doctor` to inspect installed files, hooks, update availability, and the last recorded event. Codex hook trust is not exposed to the inspector; use `/hooks` to check it. Event timestamps are recorded only by app versions supporting this feature.
 
-The installer preserves unrelated hooks/settings, rejects unmanaged files and symlinked configuration paths, and writes a uniquely named backup before changing an existing JSON config. Reinstall updates only Splash Finish entries. Config locations honor `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and `PI_CODING_AGENT_DIR`. Removal does not delete the app, unrelated hooks, or configuration backups. Existing pi sessions need `/reload` after either operation.
+The installer preserves unrelated hooks/settings, rejects unmanaged files and symlinked configuration paths, and writes a uniquely named backup before changing an existing JSON config, keeping the three newest backups. Reinstall updates only Splash Finish entries, and the app offers a repair when its version or location changed because hooks embed the absolute path of the binary. Config locations honor `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and `PI_CODING_AGENT_DIR`. Removal does not delete the app, unrelated hooks, or configuration backups. Existing pi sessions need `/reload` after either operation.
 
 ### Rich pi questions
 
 Install [pi-agent-ask](https://github.com/alexshpunt/pi-agent-ask) separately with `pi install npm:pi-agent-ask`. Do not install it alongside another provider of `ask_user`. Splash Finish checks the globally configured package and recommends installation if it is not detected; project-local and manually loaded packages cannot always be detected.
 
-Run `splash-finish install-skills --agent pi` to install the integration. Rich questions are enabled automatically when pi-agent-ask is detected globally; an already-enabled integration is preserved on reinstall. Use the checkbox in **Integrations…** to enable or disable rich questions explicitly, including for project-local installations. Run `/reload` in existing pi sessions after changes. Splash Finish never installs or removes pi-agent-ask itself.
+Run `splash-finish install-skills --agent pi` to install the integration. Rich questions are enabled automatically when pi-agent-ask is detected globally; an already-enabled integration is preserved on reinstall. Use the checkbox in **Integrations…** to enable or disable rich questions explicitly, including for project-local installations; the checkbox applies immediately. Run `/reload` in existing pi sessions after changes. Splash Finish never installs or removes pi-agent-ask itself.
 
-The adapter uses pi-agent-ask's documented versioned lifecycle and submit events, without patching its UI. It supports multiple questions, single/multiple choices, custom answers, question and option notes. Submit waits for pi's acknowledgement; if the terminal answers first, the card closes. **Answer in pi** closes the card without answering it; Snooze preserves it; Clear all keeps pending questions. If the app is unavailable or a form is unsupported, the original pi interface remains available.
+The adapter uses pi-agent-ask's documented versioned lifecycle and submit events, without patching its UI. It supports multiple questions, single/multiple choices, custom answers, question and option notes. Submit waits for pi's acknowledgement; if the terminal answers first, the card closes. **Answer in pi** closes the card without answering it; Snooze preserves it; Clear all keeps pending questions. In the card, `⌘1`…`⌘9` toggle options and `⌘Return` submits; plain digits keep working inside the text fields. If the app is unavailable or a form is unsupported, the original pi interface remains available.
 
 Question text and answers travel over a per-request local Unix socket in a user-private directory, not in the deep link or persisted inbox. Other processes running as your user are not a security boundary. A newer or older pi-agent-ask version may change its event contract; version 2.0.2 is the tested baseline.
 
@@ -135,6 +140,8 @@ SPLASH_FINISH_GUI_TESTS=1 python3 -m unittest discover -s Tests -p test_app_smok
 
 `Package.swift` builds a SwiftUI/AppKit app and a separate testable core, with the pinned Sparkle binary dependency. `Scripts/package_app.sh` assembles the `.app`; no Xcode project is required. `install.py` is a standalone standard-library installer. Tests use temporary directories and do not alter your agent configs.
 
+`version.env` is the single source of truth for the release version: `Scripts/package_app.sh` embeds it in `Info.plist`, the app reads it back for `--version`, and CI verifies the built bundle against the file.
+
 Create a **universal** release with an available Developer ID identity:
 
 ```sh
@@ -153,6 +160,8 @@ The script waits for Apple's response, staples the ticket, checks Gatekeeper, an
 ### Sparkle updates
 
 The app embeds Sparkle 2.10.1 and checks the public `releases/latest/download/appcast.xml` feed.
+
+Upload the three assets with `Scripts/publish.sh`: it refuses a build number that is not greater than the published one, refuses to reuse an existing tag, and creates the GitHub release with generated notes.
 
 The Ed25519 private signing key is stored in the macOS login Keychain under account `io.bobuk.splash-finish`. Back it up securely offline: losing it prevents the current app from verifying updates. Never commit or publish it. The public key is embedded in the app. On the signing machine, obtain the verified Sparkle 2.10.1 release tools and set `SPARKLE_BIN` to their `bin` directory, then after notarizing run:
 

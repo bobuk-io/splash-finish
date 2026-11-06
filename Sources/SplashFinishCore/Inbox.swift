@@ -37,7 +37,7 @@ public struct Inbox: Codable, Equatable, Sendable {
             latestOrders = orders
         }
         var timestamps = lastEvents ?? [:]
-        timestamps[event.agent.lowercased()] = Date()
+        timestamps[Self.agentKey(event.agent)] = Date()
         lastEvents = timestamps
         seenEventIDs.append(event.id)
         seenEventIDs = Array(seenEventIDs.suffix(512))
@@ -61,14 +61,30 @@ public struct Inbox: Codable, Equatable, Sendable {
         return true
     }
 
+    /// Stable key for per-agent bookkeeping; display names may gain spaces or case.
+    public static func agentKey(_ agent: String) -> String {
+        agent.lowercased().filter { !$0.isWhitespace }
+    }
+
     public mutating func dismiss(key: String) {
         items.removeAll { $0.key == key }
         if items.isEmpty { snoozedUntil = nil }
     }
     public mutating func clear() { items.removeAll(); snoozedUntil = nil }
-    public mutating func snooze(now: Date = Date()) {
+    /// Dismiss everything except live keys, e.g. questions that are still connected.
+    /// The per-item path stays in the caller because only it knows the open connections.
+    public mutating func dismissAll(except keep: Set<String>) {
+        items.removeAll { !keep.contains($0.key) }
+        if items.isEmpty { snoozedUntil = nil }
+    }
+    /// Question placeholders are tied to ephemeral sockets and are stale after a restart.
+    public mutating func discardQuestionPlaceholders() {
+        items.removeAll { $0.agent.lowercased() == "pi" && $0.status == .attention && $0.task.hasPrefix(QuestionTask.prefix) }
+        if items.isEmpty { snoozedUntil = nil }
+    }
+    public mutating func snooze(now: Date = Date(), duration: TimeInterval = 15 * 60) {
         guard !items.isEmpty else { return }
-        snoozedUntil = now.addingTimeInterval(15 * 60)
+        snoozedUntil = now.addingTimeInterval(duration)
     }
     @discardableResult public mutating func wakeIfDue(now: Date = Date()) -> Bool {
         guard let deadline = snoozedUntil, now >= deadline else { return false }
@@ -76,6 +92,35 @@ public struct Inbox: Codable, Equatable, Sendable {
         return !items.isEmpty
     }
     public mutating func reveal() { snoozedUntil = nil }
+}
+
+public enum QuestionTask {
+    /// Task identifier prefix used for cards awaiting an answer.
+    public static let prefix = "question-"
+    public static func id(fromTask task: String) -> String? {
+        task.hasPrefix(prefix) ? String(task.dropFirst(prefix.count)) : nil
+    }
+}
+
+public enum Snooze {
+    /// Seconds until the next morning, so the inbox stays quiet for the rest of the day.
+    public static func untilTomorrowMorning(now: Date = Date(), hour: Int = 8, calendar: Calendar = .current) -> TimeInterval {
+        guard let tomorrow = calendar.date(byAdding: .day, value: 1, to: now),
+              let morning = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: tomorrow) else { return 12 * 60 * 60 }
+        return max(60, morning.timeIntervalSince(now))
+    }
+}
+
+public enum FocusStatus {
+    /// Best-effort Do Not Disturb detection. macOS exposes no public Focus API; the
+    /// system stores active assertions in this database. Unreadable means "not active".
+    public static func isDoNotDisturbActive(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
+        let url = home.appendingPathComponent("Library/DoNotDisturb/DB/Assertions.json")
+        guard let data = try? Data(contentsOf: url), data.count <= 1_000_000,
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let items = root["data"] as? [[String: Any]] else { return false }
+        return items.contains { !(($0["storeAssertionRecords"] as? [Any]) ?? []).isEmpty }
+    }
 }
 
 public struct StateFile {

@@ -46,7 +46,27 @@ try {
   await handlers.before_agent_start({}, ctx);
   await handlers.agent_settled({aborted:true}, ctx);
   assert.equal(calls.at(-1).status, 'running');
-  console.log('PASS: pi lifecycle, approval prompts, completion, error, abort and deduplication');
+
+  // In-process subagents only report requests for input.
+  const child = { cwd: '/code/demo', sessionManager: { getSessionId: () => 'child-1', getSessionFile: () => '/tmp/sessions/run-0/session.jsonl' } };
+  const beforeChild = calls.length;
+  await handlers.before_agent_start({}, child);
+  await handlers.agent_settled({aborted:false}, child);
+  assert.equal(calls.length, beforeChild, 'child lifecycle events are suppressed');
+  await handlers.ui_prompt_start({title: 'Pick a branch'}, child);
+  assert.equal(calls.at(-1).status, 'attention');
+  assert.equal(calls.at(-1).task, 'child-1');
+
+  // Background subagents are detected through the environment instead of the session file.
+  process.env.PI_SUBAGENT_CHILD = '1';
+  try {
+    const beforeEnvChild = calls.length;
+    await handlers.before_agent_start({}, ctx);
+    await handlers.agent_settled({aborted:false}, ctx);
+    assert.equal(calls.length, beforeEnvChild, 'PI_SUBAGENT_CHILD lifecycle events are suppressed');
+  } finally { delete process.env.PI_SUBAGENT_CHILD; }
+  assert.ok(calls.length > 0);
+  console.log('PASS: pi lifecycle, approval prompts, completion, error, abort, deduplication and subagent filtering');
 } finally {
   await rm(temp, { recursive: true, force: true });
 }
