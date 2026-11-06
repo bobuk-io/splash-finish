@@ -24,6 +24,7 @@ struct PiQuestion: Decodable {
     let questions: [Item]
     let project: String
     let session: String?
+    let orca: OrcaSource?
 }
 
 @MainActor final class QuestionConnection: Identifiable {
@@ -73,6 +74,7 @@ struct PiQuestion: Decodable {
                         guard let form = try? JSONDecoder().decode(PiQuestion.self, from: line),
                               !form.questions.isEmpty, form.questions.count <= 20,
                               form.questions.allSatisfy({ !$0.id.isEmpty && !$0.options.isEmpty && $0.options.count <= 30 }) else { self.end(); return }
+                        if let orca = form.orca, (try? orca.validated()) == nil { self.end(); return }
                         self.receivedForm = true; self.onQuestion?(form)
                     } else if let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any], let type = object["type"] as? String {
                         if type == "result", let ok = object["ok"] as? Bool { self.onResult?(ok, object["message"] as? String) }

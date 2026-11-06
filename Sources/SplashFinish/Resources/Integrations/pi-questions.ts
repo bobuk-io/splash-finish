@@ -10,7 +10,8 @@ import { dirname, join } from 'node:path';
 const executable: string = __EXECUTABLE_JSON__;
 const maxBytes = 131072;
 type Question = { id: string; label: string; prompt: string; context?: string; type: 'single' | 'multi'; options: { value: string; label: string; description?: string; recommended?: boolean }[] };
-type Form = { title?: string; questions: Question[]; project: string; session: string };
+type OrcaSource = { terminal?: string; worktree?: string; pane?: string };
+type Form = { title?: string; questions: Question[]; project: string; session: string; orca?: OrcaSource };
 type Transport = { close(): void; result(ok: boolean, message?: string): void };
 
 function normalize(event: any, ctx: ExtensionContext): Form | undefined {
@@ -27,6 +28,15 @@ function normalize(event: any, ctx: ExtensionContext): Form | undefined {
         }
     }
     const form: Form = { title: event.title, questions: event.questions.map((q: any) => ({ id: q.id, label: q.label, prompt: q.prompt, context: q.context, type: q.type, options: q.options.map((o: any) => ({ value: o.value, label: o.label, description: o.description, recommended: o.recommended === true })) })), project: ctx.cwd.split('/').pop() || '', session: ctx.sessionManager.getSessionId() };
+    // Carry the original terminal, not the foreground project at the time of the click.
+    const terminal = process.env.ORCA_TERMINAL_HANDLE;
+    const worktree = process.env.ORCA_WORKTREE_ID ?? process.env.ORCA_WORKSPACE_ID;
+    const pane = process.env.ORCA_PANE_KEY;
+    if (terminal && /^term_[A-Za-z0-9_-]+$/.test(terminal) && terminal.length <= 128) {
+        form.orca = { terminal };
+        if (worktree && Buffer.byteLength(worktree) <= 2048 && !/[\x00-\x1f\x7f]/.test(worktree)) form.orca.worktree = worktree;
+        if (pane && /^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/.test(pane) && pane.length <= 256) form.orca.pane = pane;
+    }
     if (Buffer.byteLength(JSON.stringify(form)) > maxBytes) return;
     return form;
 }

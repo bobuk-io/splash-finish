@@ -23,7 +23,17 @@ try {
     {id:'one', label:'First', prompt:'Choose', type:'single', options:[{value:'1', label:'One'}, {value:'2', label:'Two'}]},
     {id:'two', label:'Second', prompt:'Choose more', type:'multi', options:[{value:'a',label:'A'}, {value:'b',label:'B'}]}
   ];
-  events.emit('pi-agent-ask:started', {version:1, flowId:'flow-1', questions});
+  const orcaEnv = ['ORCA_TERMINAL_HANDLE', 'ORCA_WORKTREE_ID', 'ORCA_PANE_KEY'];
+  const previous = orcaEnv.map(key => process.env[key]);
+  try {
+    process.env.ORCA_TERMINAL_HANDLE = 'term_original';
+    process.env.ORCA_WORKTREE_ID = 'repo-123::/tmp/Project With Spaces';
+    process.env.ORCA_PANE_KEY = 'tab-1:leaf-1';
+    events.emit('pi-agent-ask:started', {version:1, flowId:'flow-1', questions});
+    assert.deepEqual(forms[0].form.orca, {terminal:'term_original', worktree:'repo-123::/tmp/Project With Spaces', pane:'tab-1:leaf-1'});
+  } finally {
+    orcaEnv.forEach((key, i) => { if (previous[i] == null) delete process.env[key]; else process.env[key] = previous[i]; });
+  }
   events.emit('pi-agent-ask:started', {version:1, flowId:'flow-2', questions});
   assert.equal(forms.length, 2); assert.equal(forms[0].form.session, 'session');
   const answer = {kind:'answer', answers:{one:{values:['2']},two:{values:['a','b'],note:'ok'}}};

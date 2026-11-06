@@ -39,6 +39,7 @@ private struct NotificationRow: View {
     private let muted = Color(hex: 0xA4AFB3)
     private var sourceAction: String {
         if event.source?.url != nil { return "Open source session" }
+        if event.source?.orca != nil { return "Open original Orca project and terminal" }
         if event.source?.weztermPane != nil { return "Open WezTerm pane if available" }
         if event.source?.bundleID == "com.github.wez.wezterm" { return "Activate WezTerm" }
         if event.source?.bundleID != nil { return "Activate source app" }

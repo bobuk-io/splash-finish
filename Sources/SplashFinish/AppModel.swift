@@ -74,7 +74,8 @@ import SplashFinishCore
             guard let self else { return }
             self.questions[id] = question
             self.receive(AgentEvent(task: "question-" + id, agent: "pi", status: .attention,
-                                    title: "Question awaiting your answer", detail: "pi-agent-ask", project: question.project))
+                                    title: "Question awaiting your answer", detail: "pi-agent-ask", project: question.project,
+                                    source: question.orca.map { EventSource(bundleID: OrcaSource.bundleID, orca: $0) }))
         }
         connection.onResult = { [weak self] ok, error in
             guard let self else { return }
@@ -104,7 +105,11 @@ import SplashFinishCore
             submittingQuestions.remove(id); questionErrors[id] = "Answer is too large or the connection is unavailable."
         }
     }
-    func usePi(id: String) { questionConnections[id]?.end() }
+    func usePi(id: String) {
+        let event = inbox.items.first { questionID(for: $0) == id }
+        questionConnections[id]?.end()
+        if let event, event.source?.orca != nil { SourceNavigator.open(event, model: self) }
+    }
     func questionID(for event: AgentEvent) -> String? {
         guard event.agent.lowercased() == "pi", let id = QuestionTask.id(fromTask: event.task) else { return nil }
         return questions[id] == nil ? nil : id

@@ -104,6 +104,21 @@ class AppSmokeTests(unittest.TestCase):
         release.set(); thread.join(5)
         self.wait_for(lambda s: all(x['task'] != f'question-{request_id}' for x in s['items']))
 
+    def test_orca_coordinates_survive_notify_and_claude_hook(self):
+        env = {**self.env, "ORCA_TERMINAL_HANDLE": "term_original",
+               "ORCA_WORKTREE_ID": "repo-123::/tmp/Project With Spaces",
+               "ORCA_PANE_KEY": "tab-1:leaf-1"}
+        subprocess.run([str(APP), "notify", "--agent", "pi", "--task", "orca-pi", "--title", "Done"],
+                       env=env, capture_output=True, text=True, check=True, timeout=10)
+        hook = {"session_id": "orca-claude", "hook_event_name": "Stop", "cwd": "/tmp/unrelated"}
+        subprocess.run([str(APP), "hook", "claude", "--managed-splash-finish"],
+                       input=json.dumps(hook), env=env, capture_output=True, text=True, check=True, timeout=10)
+        state = self.wait_for(lambda s: len(s["items"]) == 2)
+        for event in state["items"]:
+            self.assertEqual(event["source"]["orca"], {
+                "terminal": "term_original", "worktree": env["ORCA_WORKTREE_ID"], "pane": "tab-1:leaf-1"})
+            self.assertEqual(event["source"]["bundleID"], "com.stablyai.orca")
+
     def test_delivery_snooze_and_hook_lifecycle(self):
         self.run_cli("notify", "--agent", "Codex", "--task", "one", "--title", "First task")
         self.wait_for(lambda s: len(s["items"]) == 1)

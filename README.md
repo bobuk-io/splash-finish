@@ -36,7 +36,7 @@ The three bars in your menu bar are Splash Finish. One floating panel is shared 
 - **Needs attention** appears above **Completed**. A new result expands the same window; a long list scrolls.
 - **×** dismisses one notification. **Clear all** clears the list and hides the panel.
 - **Snooze** hides the panel for 15 minutes or until a genuinely new event arrives, whichever comes first. The menu bar offers 15 minutes, 1 hour, or until tomorrow morning. The inbox is retained, including across app restarts.
-- Click a row to return to its source when possible. A supplied session link is preferred; WezTerm pane IDs are captured when available. If exact navigation fails, Splash Finish activates the originating app. Other terminals do not guarantee the original tab or window can be selected.
+- Click a row to return to its source when possible. A supplied session link is preferred; Orca terminal/workspace coordinates and WezTerm pane IDs are captured when available. In Orca, a click switches to the original project, terminal tab and split pane via its CLI. If exact navigation fails, Splash Finish activates the originating app; it never chooses another Orca project or launches a replacement agent. Other terminals do not guarantee the original tab or window can be selected.
 - The inbox keeps at most the 200 most recent notifications; when it overflows, the oldest entries are dropped even if they were asking for attention.
 - Use the menu bar to reopen the inbox, send a test notification, install integrations, or enable **Start at Login**. **Respect Do Not Disturb** hides automatic reveals while macOS Focus is on; events still land in the inbox and update the badge, and an explicit `show` always opens it. When the panel appears, it takes keyboard focus: `Esc` snoozes, `Backspace` (or `⌘W`) clears all, `↑` / `↓` select a notification, and `Return` opens its source. A new notification in an already-visible panel does not steal focus back if you switched away.
 - `⌥⌘S` opens the inbox from anywhere, even when Splash Finish is not the active app.
@@ -63,6 +63,12 @@ splash-finish notify --agent 'Claude Code' --task migration \
 
 Keep `--agent` and `--task` stable for the same session: an update replaces its earlier notification instead of adding a duplicate. A new event wakes snooze; an identical repeated event does not. `--status running` removes an outdated notification without waking the panel. `--project` sets a label; otherwise the current directory name is used. A verified originating session URL can be supplied with `--source-url`.
 
+### Returning to Orca
+
+Agents started in a **local Orca terminal** automatically pass their terminal handle, workspace and pane identity to Splash Finish. This works with pi, Claude Code, Codex and manual `splash-finish notify` calls; no per-project setup is needed. Changing the agent's working directory does not change the captured workspace. For rich pi questions, **Answer in pi** also returns to that terminal (reload the updated question adapter first).
+
+Orca is contacted only when you click a notification, not on every agent event. Splash Finish uses the CLI bundled with the installed Orca app, so Finder's `PATH` does not matter. If Orca restarted, it re-discovers the same pane using workspace/tab/pane IDs rather than reusing a stale terminal handle. A closed or unresolvable pane produces an unavailable-source message instead of selecting a different agent. Existing notifications created before this support was added cannot recover coordinates retroactively. Remote/paired Orca runtimes are not supported.
+
 ### Deep links
 
 The CLI uses `splash-finish://` URLs; automation can use them too. Percent-encode parameter values:
@@ -72,7 +78,7 @@ open 'splash-finish://event?agent=Codex&task=auth&status=done&title=Authenticati
 open 'splash-finish://show'
 ```
 
-`agent`, `task`, and `status` (`done`, `attention`, or `running`) are required. Optional fields: `id` (event replay ID), `title`, `detail`, `project`, `source-pid`, `source-bundle`, and `source-url`. Source URLs accept only `https`, `http`, `vscode`, `vscode-insiders`, `cursor`, `windsurf`, `zed`, `iterm2`, or `codex`. An `id` may be replayed safely; duplicate query parameters are rejected. Optional `run` and `sequence` are non-negative integers and must be provided together. They order updates per agent/task; older generations and non-increasing sequences are ignored, even after dismissing a notification. Once a task sends ordered updates, legacy unordered updates for that same task are ignored while the bounded ordering record remains. Pi supplies these fields; Claude and Codex hooks currently do not expose a reliable common ordering guarantee.
+`agent`, `task`, and `status` (`done`, `attention`, or `running`) are required. Optional fields: `id` (event replay ID), `title`, `detail`, `project`, `source-pid`, `source-bundle`, and `source-url`. Orca coordinates use `orca-terminal` (runtime handle), `orca-worktree` (workspace identity) and `orca-pane` (`tabId:leafId`); these are captured automatically by the CLI when inherited from Orca. Source URLs accept only `https`, `http`, `vscode`, `vscode-insiders`, `cursor`, `windsurf`, `zed`, `iterm2`, or `codex`. An `id` may be replayed safely; duplicate query parameters are rejected. Optional `run` and `sequence` are non-negative integers and must be provided together. They order updates per agent/task; older generations and non-increasing sequences are ignored, even after dismissing a notification. Once a task sends ordered updates, legacy unordered updates for that same task are ignored while the bounded ordering record remains. Pi supplies these fields; Claude and Codex hooks currently do not expose a reliable common ordering guarantee.
 
 Deep links are not authenticated: any local app can send them. They display bounded local text; Splash Finish never runs commands from a link. Open source links only if you trust the sender.
 

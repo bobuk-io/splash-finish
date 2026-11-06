@@ -4,13 +4,18 @@ import SplashFinishCore
 
 @MainActor enum SourceNavigator {
     static func capture() -> EventSource? {
+        let env = ProcessInfo.processInfo.environment
+        // Orca's PTY host can obscure its app ancestor. Inherited coordinates are
+        // both more precise and cheaper than walking the process tree.
+        if let orca = OrcaSource.capture(environment: env) {
+            return EventSource(bundleID: OrcaSource.bundleID, orca: orca)
+        }
         var pid = getppid()
         for _ in 0..<48 {
             guard pid > 1 else { break }
             if let app = NSRunningApplication(processIdentifier: pid),
                let bundleID = app.bundleIdentifier, bundleID != AppPaths.bundleID,
                app.activationPolicy != .prohibited {
-                let env = ProcessInfo.processInfo.environment
                 let pane = bundleID == "com.github.wez.wezterm" ? env["WEZTERM_PANE"].flatMap(UInt64.init) : nil
                 return EventSource(pid: pid, bundleID: bundleID, weztermPane: pane)
             }
@@ -28,6 +33,14 @@ import SplashFinishCore
     static func open(_ event: AgentEvent, model: AppModel) {
         if let raw = event.source?.url, AgentEvent.isSafeSourceURL(raw), let url = URL(string: raw) {
             if NSWorkspace.shared.open(url) { return }
+        }
+        if let orca = event.source?.orca {
+            OrcaNavigator.open(orca) { opened in
+                guard !opened else { return }
+                NSRunningApplication.runningApplications(withBundleIdentifier: OrcaSource.bundleID).first?.activate(options: [])
+                model.message = "The original Orca terminal is unavailable. No other project was selected."
+            }
+            return
         }
         if let pane = event.source?.weztermPane, event.source?.bundleID == "com.github.wez.wezterm",
            let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.github.wez.wezterm") {

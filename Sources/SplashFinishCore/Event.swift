@@ -9,8 +9,10 @@ public struct EventSource: Codable, Equatable, Sendable {
     public var bundleID: String?
     public var url: String?
     public var weztermPane: UInt64?
-    public init(pid: Int32? = nil, bundleID: String? = nil, url: String? = nil, weztermPane: UInt64? = nil) {
-        self.pid = pid; self.bundleID = bundleID; self.url = url; self.weztermPane = weztermPane
+    public var orca: OrcaSource?
+    public init(pid: Int32? = nil, bundleID: String? = nil, url: String? = nil, weztermPane: UInt64? = nil,
+                orca: OrcaSource? = nil) {
+        self.pid = pid; self.bundleID = bundleID; self.url = url; self.weztermPane = weztermPane; self.orca = orca
     }
 }
 
@@ -52,6 +54,7 @@ public struct AgentEvent: Codable, Equatable, Identifiable, Sendable {
         event.project = Self.clean(project, limit: 100)
         if event.title.isEmpty { event.title = status == .attention ? "Needs your attention" : "Work completed" }
         if let link = source?.url, !Self.isSafeSourceURL(link) { throw EventError.invalid("Unsupported source URL scheme") }
+        if let orca = source?.orca { _ = try orca.validated() }
         return event
     }
 
@@ -90,6 +93,9 @@ public enum DeepLink {
             fields["source-bundle"] = source.bundleID
             fields["source-url"] = source.url
             fields["wezterm-pane"] = source.weztermPane.map(String.init)
+            fields["orca-terminal"] = source.orca?.terminal
+            fields["orca-worktree"] = source.orca?.worktree
+            fields["orca-pane"] = source.orca?.pane
         }
         c.queryItems = fields.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
         guard let url = c.url else { throw EventError.invalid("Could not encode event") }
@@ -108,8 +114,10 @@ public enum DeepLink {
               let status = EventStatus(rawValue: fields["status"] ?? "") else { throw EventError.invalid("Event requires agent, task and status") }
         let pane = fields["wezterm-pane"].flatMap(UInt64.init)
         guard fields["wezterm-pane"] == nil || pane != nil else { throw EventError.invalid("Invalid WezTerm pane ID") }
+        let hasOrca = ["orca-terminal", "orca-worktree", "orca-pane"].contains { fields[$0] != nil }
+        let orca = hasOrca ? OrcaSource(terminal: fields["orca-terminal"], worktree: fields["orca-worktree"], pane: fields["orca-pane"]) : nil
         let source = EventSource(pid: fields["source-pid"].flatMap(Int32.init), bundleID: fields["source-bundle"],
-                                 url: fields["source-url"], weztermPane: pane)
+                                 url: fields["source-url"], weztermPane: pane, orca: orca)
         let run = fields["run"].flatMap(Int64.init), sequence = fields["sequence"].flatMap(Int64.init)
         guard (fields["run"] == nil && fields["sequence"] == nil) || (run != nil && sequence != nil) else {
             throw EventError.invalid("Invalid event ordering fields")
