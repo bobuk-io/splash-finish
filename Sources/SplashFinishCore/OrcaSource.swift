@@ -7,9 +7,19 @@ public struct OrcaSource: Codable, Equatable, Sendable {
     public var terminal: String?
     public var worktree: String?
     public var pane: String?
+    /// Structured chat identity. Agents running in Orca's built-in chat have no
+    /// terminal handle, so this is the only way back to the exact chat.
+    public var session: String?
 
-    public init(terminal: String? = nil, worktree: String? = nil, pane: String? = nil) {
-        self.terminal = terminal; self.worktree = worktree; self.pane = pane
+    public init(terminal: String? = nil, worktree: String? = nil, pane: String? = nil, session: String? = nil) {
+        self.terminal = terminal; self.worktree = worktree; self.pane = pane; self.session = session
+    }
+
+    /// Orca's own session identifier shape: 8–128 letters, digits, dashes or underscores.
+    public static func isSessionID(_ text: String) -> Bool {
+        (8...128).contains(text.utf8.count) && text.utf8.allSatisfy {
+            (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || $0 == 45 || $0 == 95
+        }
     }
 
     public func validated() throws -> Self {
@@ -35,10 +45,22 @@ public struct OrcaSource: Codable, Equatable, Sendable {
                 throw EventError.invalid("Invalid Orca workspace identity")
             }
         }
-        guard terminal != nil || (pane != nil && worktree != nil) else {
-            throw EventError.invalid("Orca source requires a terminal or workspace and pane")
+        if let session {
+            guard Self.isSessionID(session) else { throw EventError.invalid("Invalid Orca chat identity") }
+        }
+        guard terminal != nil || session != nil || (pane != nil && worktree != nil) else {
+            throw EventError.invalid("Orca source requires a terminal, a chat session, or a workspace and pane")
         }
         return self
+    }
+
+    /// Ordered navigation attempts. A terminal pane is exact; the chat is the
+    /// fallback for a structured session that has no terminal of its own.
+    public var targets: [OrcaTarget] {
+        var result: [OrcaTarget] = []
+        if terminal != nil || pane != nil { result.append(.terminal) }
+        if session != nil { result.append(.chat) }
+        return result
     }
 
     /// No Orca subprocess on the hot hook path: these coordinates are inherited by
@@ -46,7 +68,8 @@ public struct OrcaSource: Codable, Equatable, Sendable {
     public static func capture(environment: [String: String]) -> Self? {
         let source = Self(terminal: environment["ORCA_TERMINAL_HANDLE"],
                           worktree: environment["ORCA_WORKTREE_ID"] ?? environment["ORCA_WORKSPACE_ID"],
-                          pane: environment["ORCA_PANE_KEY"])
+                          pane: environment["ORCA_PANE_KEY"],
+                          session: environment["ORCA_AGENT_SESSION_ID"])
         return try? source.validated()
     }
 
@@ -62,6 +85,11 @@ public struct OrcaSource: Codable, Equatable, Sendable {
         guard matches.count == 1 else { return nil }
         return matches[0].handle
     }
+}
+
+/// Where a click should try to land inside Orca.
+public enum OrcaTarget: String, Equatable, Sendable {
+    case terminal, chat
 }
 
 public struct OrcaTerminal: Decodable, Sendable {
@@ -101,5 +129,26 @@ public enum OrcaReply {
         // A paired/headless runtime can accept the command without navigating a desktop.
         guard let focus = result["focus"] as? [String: Any] else { return false }
         return focus["navigated"] as? Bool == true
+    }
+    /// The reveal helper answers with two replies: the published chat and the
+    /// workspace activation. Both must confirm the session we clicked, because a
+    /// published tab can stay behind the workspace Orca currently shows.
+    public static func revealed(_ data: Data, session: String) -> Bool {
+        let replies = data.split(separator: UInt8(ascii: "\n")).compactMap { line in
+            try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any]
+        }
+        guard replies.count == 2,
+              let reveal = success(replies[0]), reveal["ok"] as? Bool == true,
+              reveal["sessionId"] as? String == session,
+              let workspace = reveal["workspaceId"] as? String, !workspace.isEmpty,
+              let activate = success(replies[1]),
+              activate["activated"] as? Bool == true,
+              activate["worktreeId"] as? String == workspace else { return false }
+        return true
+    }
+
+    private static func success(_ reply: [String: Any]) -> [String: Any]? {
+        guard reply["ok"] as? Bool == true, let result = reply["result"] as? [String: Any] else { return nil }
+        return result
     }
 }

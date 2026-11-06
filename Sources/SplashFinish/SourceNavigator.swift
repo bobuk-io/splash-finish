@@ -40,7 +40,7 @@ import SplashFinishCore
             OrcaNavigator.open(orca) { opened in
                 if !opened {
                     NSRunningApplication.runningApplications(withBundleIdentifier: OrcaSource.bundleID).first?.activate(options: [])
-                    model.message = "The original Orca terminal is unavailable. No other project was selected."
+                    model.message = "The original Orca chat or terminal is unavailable. No other project was selected."
                 }
                 completion(opened)
             }

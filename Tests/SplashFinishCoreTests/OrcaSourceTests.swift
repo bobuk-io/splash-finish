@@ -9,6 +9,62 @@ final class OrcaSourceTests: XCTestCase {
                      executionHostId: host, orphaned: orphaned, connected: connected)
     }
 
+    func testStructuredChatCaptureAndTargets() throws {
+        // Orca's built-in chat injects only the session identity: no terminal, pane or worktree.
+        let chat = OrcaSource.capture(environment: ["ORCA_AGENT_SESSION_ID": "claude_450ad2e5_96a8_475f_bfc8_10fb9d07e794"])
+        XCTAssertEqual(chat, OrcaSource(session: "claude_450ad2e5_96a8_475f_bfc8_10fb9d07e794"))
+        XCTAssertEqual(chat?.targets, [.chat])
+        // A terminal keeps priority; the chat stays as a second attempt.
+        let both = OrcaSource(terminal: "term_a", worktree: workspace, pane: "tab-1:leaf-1", session: "claude_abc12345")
+        XCTAssertEqual(try both.validated().targets, [.terminal, .chat])
+        XCTAssertEqual(OrcaSource(terminal: "term_a").targets, [.terminal])
+        XCTAssertEqual(OrcaSource(worktree: workspace, pane: "tab-1:leaf-1").targets, [.terminal])
+    }
+
+    func testRejectsMalformedChatIdentity() {
+        for session in ["", "short", "--help", "claude_450ad2e5 96a8", "claude/450", String(repeating: "a", count: 129),
+                        "splash-finish://clear", "claude_450ad2e5_96a8\nv2"] {
+            XCTAssertThrowsError(try OrcaSource(session: session).validated(), session)
+        }
+        XCTAssertNoThrow(try OrcaSource(session: "claude_450ad2e5_96a8_475f_bfc8_10fb9d07e794").validated())
+        XCTAssertFalse(OrcaSource.isSessionID("has space"))
+        XCTAssertFalse(OrcaSource.isSessionID("short7"))
+    }
+
+    func testChatSessionSurvivesDeepLinkAndPersistence() throws {
+        let source = EventSource(bundleID: OrcaSource.bundleID, orca: OrcaSource(session: "claude_450ad2e5_96a8_475f_bfc8_10fb9d07e794"))
+        let event = AgentEvent(task: "session", agent: "Claude Code", status: .done, title: "Done", source: source)
+        let url = try DeepLink.eventURL(event)
+        XCTAssertTrue(url.absoluteString.contains("orca-session=claude_450ad2e5_96a8_475f_bfc8_10fb9d07e794"))
+        XCTAssertEqual(try DeepLink.parse(url).source, source)
+        var inbox = Inbox()
+        try inbox.receive(event)
+        XCTAssertEqual(try JSONDecoder().decode(Inbox.self, from: JSONEncoder().encode(inbox)).items.first?.source, source)
+        let legacy = try JSONDecoder().decode(EventSource.self, from: Data(#"{"bundleID":"com.stablyai.orca","orca":{"terminal":"term_a"}}"#.utf8))
+        XCTAssertNil(legacy.orca?.session)
+    }
+
+    func testRevealReplyMustConfirmTheClickedSession() {
+        let workspace = "repo-1::/Users/me/orca/files-speed"
+        func replies(_ reveal: String, _ activate: String) -> Data { Data((reveal + "\n" + activate + "\n").utf8) }
+        let revealed = #"{"ok":true,"result":{"ok":true,"sessionId":"claude_abc12345","workspaceId":"__W__","agent":"claude","readable":true}}"#
+            .replacingOccurrences(of: "__W__", with: workspace)
+        let activated = #"{"ok":true,"result":{"repoId":"repo-1","worktreeId":"__W__","activated":true}}"#
+            .replacingOccurrences(of: "__W__", with: workspace)
+        XCTAssertTrue(OrcaReply.revealed(replies(revealed, activated), session: "claude_abc12345"))
+        // A different chat, an unconfirmed activation or a different workspace must not consume the card.
+        XCTAssertFalse(OrcaReply.revealed(replies(revealed, activated), session: "claude_other123"))
+        XCTAssertFalse(OrcaReply.revealed(replies(revealed, #"{"ok":true,"result":{"activated":false}}"#), session: "claude_abc12345"))
+        XCTAssertFalse(OrcaReply.revealed(replies(revealed, #"{"ok":true,"result":{"activated":true,"worktreeId":"other::/tmp"}}"#), session: "claude_abc12345"))
+        XCTAssertTrue(OrcaReply.revealed(replies(revealed, activated) + Data("\n".utf8), session: "claude_abc12345"),
+                      "the writer terminates every JSON line")
+        for failure in [#"{"ok":true,"result":{"ok":false,"refusal":{"code":"agent_session_operation_unknown"}}}"# +
+                        "\n" + activated, #"{"ok":false,"error":{"code":"terminal_exited"}}"# + "\n" + activated,
+                        revealed, "not json"] {
+            XCTAssertFalse(OrcaReply.revealed(Data(failure.utf8), session: "claude_abc12345"), failure)
+        }
+    }
+
     func testCaptureIsIndependentOfAgentAndWorkingDirectory() {
         let source = OrcaSource.capture(environment: [
             "ORCA_TERMINAL_HANDLE": "term_original", "ORCA_WORKTREE_ID": workspace,
@@ -17,6 +73,7 @@ final class OrcaSourceTests: XCTestCase {
         XCTAssertEqual(source, OrcaSource(terminal: "term_original", worktree: workspace, pane: "tab-1:leaf-1"))
         XCTAssertNil(OrcaSource.capture(environment: ["TERM_PROGRAM": "WezTerm"]))
         XCTAssertNil(OrcaSource.capture(environment: ["ORCA_PI_STATUS_OWNED": "123"]))
+        XCTAssertNil(OrcaSource.capture(environment: ["ORCA_AGENT_SESSION_ID": "nope"]))
         let folder = OrcaSource.capture(environment: [
             "ORCA_TERMINAL_HANDLE": "term_folder", "ORCA_WORKSPACE_ID": "folder:abc"
         ])

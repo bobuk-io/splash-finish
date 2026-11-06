@@ -9,7 +9,8 @@ let package = Package(
     targets: [
         .target(name: "SplashFinishCore"),
         .executableTarget(name: "SplashFinish", dependencies: ["SplashFinishCore", .product(name: "Sparkle", package: "Sparkle")],
-                          resources: [.copy("Resources/Integrations")]),
-        .testTarget(name: "SplashFinishCoreTests", dependencies: ["SplashFinishCore"])
+                          resources: [.copy("Resources/Integrations"), .copy("Resources/Orca")]),
+        .testTarget(name: "SplashFinishCoreTests", dependencies: ["SplashFinishCore"]),
+        .testTarget(name: "SplashFinishTests", dependencies: ["SplashFinish"])
     ]
 )
