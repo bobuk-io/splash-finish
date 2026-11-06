@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import SplashFinish
 
@@ -23,6 +24,44 @@ final class MessagePreviewTests: XCTestCase {
             XCTAssertTrue((text.attribute(.font, at: code, effectiveRange: nil) as! NSFont).isFixedPitch)
             let link = (text.string as NSString).range(of: "release").location
             XCTAssertEqual(text.attribute(.link, at: link, effectiveRange: nil) as? URL, URL(string: "https://example.com"))
+        }
+    }
+
+    func testPreviewContainerFollowsActualWidthAfterLayoutProbes() async throws {
+        try await MainActor.run {
+            _ = NSApplication.shared
+            let preview = MessagePreview(
+                text: "Готово. [0.3.5](https://example.com) опубликован, установлен и запущен локально. CI зелёный на коммите релиза.",
+                size: 16, color: .white, lines: 2, characterLimit: 160, onOpenSource: {})
+            let host = NSHostingView(rootView: preview.frame(width: 320))
+            host.frame = NSRect(x: 0, y: 0, width: 320, height: 80)
+            host.layoutSubtreeIfNeeded()
+            @MainActor func findPreview(in view: NSView) -> PreviewTextView? {
+                if let preview = view as? PreviewTextView { return preview }
+                return view.subviews.compactMap { findPreview(in: $0) }.first
+            }
+            let text = try XCTUnwrap(findPreview(in: host))
+            let container = try XCTUnwrap(text.textContainer)
+            let layout = try XCTUnwrap(text.layoutManager)
+            // SwiftUI may probe a narrow width before placing the view at its final width.
+            for width: CGFloat in [75, 320, 240, 320] {
+                text.setFrameSize(NSSize(width: width, height: 40))
+                layout.ensureLayout(for: container)
+                XCTAssertEqual(container.containerSize.width, width, accuracy: 0.5,
+                    "Drawing must follow the actual frame, not the last sizing proposal")
+            }
+            // A later measurement must not change drawing or clickable link geometry.
+            let measured = try XCTUnwrap(text.measuredSize(width: 75))
+            XCTAssertEqual(measured.width, 75)
+            XCTAssertEqual(container.containerSize.width, 320, accuracy: 0.5)
+            XCTAssertEqual(text.measuredSize(width: 320)?.width, 320)
+            layout.ensureLayout(for: container)
+            var lastLine = CGRect.zero
+            layout.enumerateLineFragments(forGlyphRange: layout.glyphRange(for: container)) { _, used, _, _, _ in
+                lastLine = used
+            }
+            XCTAssertGreaterThan(lastLine.width, 280, "The second line should use the available width")
+            XCTAssertEqual(text.attributedString().string, preview.content.string)
         }
     }
 

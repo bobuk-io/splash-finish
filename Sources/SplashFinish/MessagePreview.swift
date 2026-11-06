@@ -44,7 +44,7 @@ struct MessagePreview: NSViewRepresentable {
         ]
         view.textContainerInset = .zero
         view.textContainer?.lineFragmentPadding = 0
-        view.textContainer?.widthTracksTextView = false
+        view.textContainer?.widthTracksTextView = true
         view.textContainer?.lineBreakMode = .byTruncatingTail
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return view
@@ -60,18 +60,34 @@ struct MessagePreview: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: PreviewTextView, context: Context) -> CGSize? {
-        let width = max(1, proposal.width ?? 320)
-        nsView.textContainer?.containerSize = CGSize(width: width, height: .greatestFiniteMagnitude)
-        guard let container = nsView.textContainer, let layout = nsView.layoutManager else { return nil }
-        layout.ensureLayout(for: container)
-        let used = layout.usedRect(for: container)
-        return CGSize(width: min(width, ceil(used.width)), height: ceil(used.height))
+        nsView.measuredSize(width: max(1, proposal.width ?? 320))
     }
 }
 
 final class PreviewTextView: NSTextView {
     var onOpenSource: (() -> Void)?
     var onOpenLink: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    /// SwiftUI can measure several proposals without ever placing the view at those
+    /// sizes. Keep those probes out of the live TextKit container used for drawing
+    /// and link hit testing; its width tracks the actual NSTextView frame instead.
+    func measuredSize(width: CGFloat) -> CGSize? {
+        guard let liveContainer = textContainer else { return nil }
+        let storage = NSTextStorage(attributedString: attributedString())
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = liveContainer.lineFragmentPadding
+        container.maximumNumberOfLines = liveContainer.maximumNumberOfLines
+        container.lineBreakMode = liveContainer.lineBreakMode
+        storage.addLayoutManager(layout)
+        layout.addTextContainer(container)
+        layout.ensureLayout(for: container)
+        let used = layout.usedRect(for: container)
+        // Multiline titles occupy the offered width. Compact single-line details
+        // retain their natural width so the timestamp can sit immediately after them.
+        return CGSize(width: container.maximumNumberOfLines == 1 ? min(width, ceil(used.width)) : width,
+                      height: ceil(used.height))
+    }
+
     // Don't become a text editor: panel Enter/arrows/Esc keep their existing role.
     override var acceptsFirstResponder: Bool { false }
 
