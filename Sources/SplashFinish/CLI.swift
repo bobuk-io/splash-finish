@@ -60,7 +60,6 @@ import SplashFinishCore
             while index < args.endIndex {
                 let key = args[index]
                 guard key.hasPrefix("--"), allowed.contains(key) else { throw EventError.invalid("Unknown option: \(key)") }
-                if key == "--managed-splash-finish" { index += 1; continue }
                 if flags.contains(key) {
                     guard values[key] == nil else { throw EventError.invalid("Repeated option: \(key)") }
                     values[key] = "true"; index += 1; continue

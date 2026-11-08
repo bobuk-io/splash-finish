@@ -38,6 +38,13 @@ public struct Inbox: Codable, Equatable, Sendable {
         }
         var timestamps = lastEvents ?? [:]
         timestamps[Self.agentKey(event.agent)] = Date()
+        // Agent names are free text from unauthenticated links; keep the newest few.
+        if timestamps.count > 64 {
+            let oldestFirst = timestamps.sorted { ($0.value, $0.key) < ($1.value, $1.key) }
+            for key in oldestFirst.prefix(timestamps.count - 64).map(\.key) {
+                timestamps.removeValue(forKey: key)
+            }
+        }
         lastEvents = timestamps
         seenEventIDs.append(event.id)
         seenEventIDs = Array(seenEventIDs.suffix(512))

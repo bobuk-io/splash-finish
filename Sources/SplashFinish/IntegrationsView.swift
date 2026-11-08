@@ -18,9 +18,13 @@ import SplashFinishCore
             refresh()
         } catch { message = error.localizedDescription }
     }
-    /// The rich question checkbox takes effect immediately instead of waiting for Reinstall.
+    /// The rich question checkbox takes effect immediately for an installed integration.
+    /// Before the first install it only preselects the option for the Install button:
+    /// opening this window, which sets the initial checkbox state, must never install
+    /// an integration on its own.
     private func applyRichToggle(_ value: Bool) {
-        guard let pi = statuses.first(where: { $0.agent == .pi }), pi.richQuestionsEnabled != value else { return }
+        guard let pi = statuses.first(where: { $0.agent == .pi }), pi.state != .notInstalled,
+              pi.richQuestionsEnabled != value else { return }
         install(.pi)
     }
     private func displayName(_ agent: AgentKind) -> String {

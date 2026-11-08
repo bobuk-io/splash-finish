@@ -76,6 +76,14 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(inbox.lastEvents?.keys.sorted(), ["claudecode"])
         XCTAssertEqual(Inbox.agentKey(" Claude  Code "), "claudecode")
     }
+    func testPerAgentTimestampsAreBounded() throws {
+        var inbox = Inbox()
+        for index in 0..<80 {
+            try inbox.receive(AgentEvent(task: "s", agent: "agent-\(index)", status: .done, title: "x"))
+        }
+        XCTAssertEqual(inbox.lastEvents?.count, 64)
+        XCTAssertNotNil(inbox.lastEvents?["agent-79"], "The newest agent survives pruning")
+    }
     func testQuestionPlaceholdersAndSelectiveClear() throws {
         var inbox = Inbox()
         let question = AgentEvent(task: QuestionTask.prefix + "abc", agent: "pi", status: .attention, title: "Question")

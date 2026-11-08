@@ -40,6 +40,9 @@ private final class SplashPanel: NSPanel {
     private var startAtLoginItem: NSMenuItem?
     private var pendingURLs = [URL]()
     private var observers = [NSObjectProtocol]()
+    /// Programmatic frame changes also post didMove; only user drags are remembered.
+    private var isPlacingPanel = false
+    private static let panelCornerKey = "panelTopLeft"
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -73,7 +76,7 @@ private final class SplashPanel: NSPanel {
         updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
         hotKey = GlobalHotKey { [weak self] in self?.model.show() }
         makeMenu()
-        update(reveal: !model.items.isEmpty && !model.isSnoozed)
+        update(reveal: model.revealsAtLaunch)
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.offerIntegrationUpdates() }
         let urls = pendingURLs; pendingURLs.removeAll()
         urls.forEach(handle)
@@ -85,6 +88,9 @@ private final class SplashPanel: NSPanel {
         })
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.positionPanel() }
+        })
+        observers.append(NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: panel, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.rememberPanelPosition() }
         })
     }
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -119,13 +125,25 @@ private final class SplashPanel: NSPanel {
     private var activeScreen: NSScreen? {
         NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? panel?.screen ?? NSScreen.main
     }
+    /// The panel keeps the corner the user dragged it to, as long as that corner is
+    /// still on a connected screen; otherwise it returns to the active screen.
+    private var rememberedPanelCorner: CGPoint? {
+        guard let values = UserDefaults.standard.array(forKey: Self.panelCornerKey) as? [Double], values.count == 2,
+              values.allSatisfy(\.isFinite) else { return nil }
+        return CGPoint(x: values[0], y: values[1])
+    }
+    private func rememberPanelPosition() {
+        guard !isPlacingPanel, panel.isVisible else { return }
+        UserDefaults.standard.set([Double(panel.frame.minX), Double(panel.frame.maxY)], forKey: Self.panelCornerKey)
+    }
     private func positionPanel() {
         guard let screen = activeScreen else { return }
-        let area = screen.visibleFrame
-        model.maxListHeight = max(110, min(460, area.height - 285))
-        let size = panelSize
-        let y = max(area.minY + 16, min(area.maxY - size.height - 16, area.midY - size.height / 2 - 55))
-        panel.setFrame(NSRect(x: area.midX - size.width / 2, y: y, width: size.width, height: size.height), display: true)
+        let placed = PanelPlacement.place(size: panelSize, remembered: rememberedPanelCorner,
+                                          screens: NSScreen.screens.map(\.visibleFrame), active: screen.visibleFrame)
+        model.maxListHeight = max(110, min(460, placed.area.height - 285))
+        isPlacingPanel = true
+        panel.setFrame(placed.frame, display: true)
+        isPlacingPanel = false
     }
     private func resize(to size: CGSize) {
         guard size.width > 0, size.height > 0, size != panelSize else { return }
@@ -137,7 +155,10 @@ private final class SplashPanel: NSPanel {
         if let area = panel.screen?.visibleFrame {
             frame.origin.y = max(area.minY + 16, min(area.maxY - size.height - 16, frame.origin.y))
         }
+        // Growing keeps the top edge, so this is not a move worth remembering.
+        isPlacingPanel = true
         panel.setFrame(frame, display: true, animate: panel.isVisible && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        isPlacingPanel = false
     }
     private func update(reveal: Bool) {
         statusItem?.button?.title = model.items.isEmpty ? "" : " \(model.items.count)"

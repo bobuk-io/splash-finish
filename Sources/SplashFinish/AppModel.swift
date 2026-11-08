@@ -48,6 +48,8 @@ import SplashFinishCore
     var selectedEvent: AgentEvent? { (attention + completed).first { $0.key == selection.key } }
     func moveSelection(_ direction: Int) { selection.move(direction, keys: orderedKeys) }
     var isSnoozed: Bool { inbox.snoozedUntil.map { $0 > Date() } ?? false }
+    /// A restored inbox opens at launch the way a fresh event would, including Focus.
+    var revealsAtLaunch: Bool { shouldReveal(!inbox.items.isEmpty && !isSnoozed) }
 
     func receive(_ event: AgentEvent) {
         do {
@@ -111,6 +113,7 @@ import SplashFinishCore
         if let event, event.source?.orca != nil { openSource(event) }
     }
     func openSource(_ event: AgentEvent) {
+        message = nil
         SourceNavigator.open(event, model: self) { [weak self] reachedExactSource in
             guard let self, self.inbox.completeSourceNavigation(event, reachedExactSource: reachedExactSource) else { return }
             self.selection.reconcile(keys: self.orderedKeys)
@@ -121,12 +124,16 @@ import SplashFinishCore
         guard event.agent.lowercased() == "pi", let id = QuestionTask.id(fromTask: event.task) else { return nil }
         return questions[id] == nil ? nil : id
     }
+    /// Footer notices describe the last thing that went wrong. Any deliberate
+    /// action on the inbox starts afresh instead of leaving an old error on screen.
     func dismiss(_ event: AgentEvent) {
+        message = nil
         if let id = questionID(for: event) { usePi(id: id); return }
         inbox.dismiss(key: event.key); selection.reconcile(keys: orderedKeys)
         persist(); scheduleWake(); onChange?(false)
     }
     func clear() {
+        message = nil
         // Pending questions remain visible: clearing a notification must not strand an agent.
         let keep = Set(inbox.items.compactMap { event in questionID(for: event).map { _ in event.key } })
         inbox.dismissAll(except: keep)
@@ -134,6 +141,7 @@ import SplashFinishCore
         persist(); scheduleWake(); onChange?(false)
     }
     func snooze(duration: TimeInterval = 15 * 60) {
+        message = nil
         inbox.snooze(duration: duration); persist(); scheduleWake(); onChange?(false)
     }
     func show() { inbox.reveal(); persist(); scheduleWake(); onChange?(true) }

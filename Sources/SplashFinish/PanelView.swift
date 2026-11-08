@@ -29,6 +29,17 @@ private struct QuietButtonStyle: ButtonStyle {
     }
 }
 
+/// "5 min ago" instead of a ticking "5 min, 11 sec": the panel should not draw the
+/// eye every second. The row tooltip carries the exact time.
+private struct AgeText: View {
+    let date: Date
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            Text(RelativeTime.describe(date, now: context.date))
+        }.lineLimit(1).fixedSize()
+    }
+}
+
 private struct NotificationRow: View {
     let event: AgentEvent
     let onOpen: () -> Void
@@ -80,7 +91,7 @@ private struct NotificationRow: View {
                                     lines: 1, characterLimit: 400, onOpenSource: onOpen)
                                 Text("·").allowsHitTesting(false)
                             }
-                            Text(event.date, style: .relative).lineLimit(1).fixedSize().allowsHitTesting(false)
+                            AgeText(date: event.date).allowsHitTesting(false)
                         }.font(.system(size: 11)).foregroundStyle(muted)
                     }.padding(.top, 3)
                     Spacer(minLength: 0)
@@ -95,7 +106,7 @@ private struct NotificationRow: View {
                         .accessibilityLabel("\(sourceAction): \(event.agent), \(MessageText.plain(event.title, limit: 160))")
                 }
                 .onHover { hovered = $0 }
-                .help("\(sourceAction) · \(MessageText.plain(event.title))")
+                .help("\(sourceAction) · \(MessageText.plain(event.title)) · \(event.date.formatted(date: .abbreviated, time: .shortened))")
             Button(action: onDismiss) {
                 Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(dismissHovered ? Color.white : muted)
@@ -112,6 +123,13 @@ private struct NotificationRow: View {
             .accessibilityAddTraits(selected ? .isSelected : [])
             .contextMenu {
                 Button("Open Source", action: onOpen)
+                Button("Copy Text") {
+                    let text = [MessageText.plain(event.title), MessageText.plain(event.detail)]
+                        .filter { !$0.isEmpty }.joined(separator: "\n")
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                }
+                Divider()
                 Button("Dismiss Notification", action: onDismiss)
             }
     }
@@ -124,9 +142,18 @@ private struct NotificationRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
     private let muted = Color(hex: 0xA4AFB3)
+    private var headline: String {
+        if model.items.isEmpty { return "You're all caught up." }
+        return model.completed.isEmpty ? "Your agents need you." : "Your agents are back."
+    }
     private var subtitle: String {
         if model.items.isEmpty { return "We'll let you know when an agent needs you." }
         return "\(model.attention.count) \(model.attention.count == 1 ? "needs" : "need") attention · \(model.completed.count) completed"
+    }
+    private var footnote: String {
+        if let message = model.message { return message }
+        if model.items.isEmpty { return "⌥⌘S opens this inbox from anywhere" }
+        return "↑↓ select · ⏎ open · ⌫ clear all · esc snooze 15 min"
     }
     private func group(_ label: String, items: [AgentEvent], color: Color) -> some View {
         VStack(alignment: .leading, spacing: 15) {
@@ -161,7 +188,7 @@ private struct NotificationRow: View {
                 Text(String(format: "%02d / INBOX", model.items.count))
                     .font(.system(size: 10, design: .monospaced)).tracking(1).foregroundStyle(muted)
             }
-            Text(model.items.isEmpty ? "You're all caught up." : "Your agents are back.")
+            Text(headline)
                 .font(.system(size: 27, weight: .medium)).tracking(-0.7).padding(.top, 18)
             Text(subtitle).font(.system(size: 12)).foregroundStyle(muted).padding(.top, 7)
             if !model.items.isEmpty {
@@ -199,7 +226,7 @@ private struct NotificationRow: View {
                 }.buttonStyle(QuietButtonStyle()).keyboardShortcut("w", modifiers: .command)
                     .help("Clear notifications; pending questions remain · Backspace or ⌘W")
             }.padding(.top, 17)
-            Text(model.message ?? "Snooze for 15 minutes or until the next update")
+            Text(footnote)
                 .font(.system(size: 10)).foregroundStyle(model.message == nil ? muted : Color(hex: 0xF0C37A))
                 .lineLimit(2).padding(.top, 13)
         }.padding(25).frame(width: 470)
