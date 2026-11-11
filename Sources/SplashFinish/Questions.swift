@@ -189,6 +189,6 @@ struct PiQuestionView: View {
                     .keyboardShortcut(.return, modifiers: .command)
                     .help("Submit the answers to pi (⌘⏎)")
             }
-        }.padding(12).background(.white.opacity(0.05), in: .rect(cornerRadius: 8))
+        }.padding(12).background(Color.panelInk.opacity(0.05), in: .rect(cornerRadius: 8))
     }
 }

@@ -10,7 +10,7 @@ extension Color {
 }
 
 struct FinishMark: View {
-    var color = Color(hex: 0xE9BE78)
+    var color = Color.panelAccent
     var body: some View {
         HStack(spacing: 3) {
             Capsule().frame(width: 4, height: 11).offset(y: 4)
@@ -24,8 +24,8 @@ private struct QuietButtonStyle: ButtonStyle {
     @Environment(\.colorSchemeContrast) private var contrast
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .background(Color.white.opacity(configuration.isPressed ? 0.14 : 0.045), in: .rect(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(contrast == .increased ? 0.5 : 0.08)))
+            .background(Color.panelInk.opacity(configuration.isPressed ? 0.14 : 0.045), in: .rect(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.panelInk.opacity(contrast == .increased ? 0.5 : 0.08)))
     }
 }
 
@@ -47,7 +47,7 @@ private struct NotificationRow: View {
     let selected: Bool
     @State private var hovered = false
     @State private var dismissHovered = false
-    private let muted = Color(hex: 0xA4AFB3)
+    private let muted = Color.panelMuted
     private var sourceAction: String {
         if event.source?.url != nil { return "Open source session" }
         if event.source?.orca?.targets.first == .chat { return "Open original Orca chat" }
@@ -64,16 +64,16 @@ private struct NotificationRow: View {
                     VStack(spacing: 8) {
                         Image(systemName: event.status == .attention ? "exclamationmark" : "checkmark")
                             .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(event.status == .attention ? Color(hex: 0xF0C37A) : Color(hex: 0x9CC9AE))
+                            .foregroundStyle(event.status == .attention ? Color.panelAccent : Color.theme(light: 0x286444, dark: 0x9CC9AE))
                             .frame(width: 23, height: 23)
-                            .background(event.status == .attention ? Color(hex: 0x51442F) : Color(hex: 0x2E403A), in: .circle)
-                        Rectangle().fill(.white.opacity(0.09)).frame(width: 1, height: 39)
+                            .background(event.status == .attention ? Color.theme(light: 0xF4E7CF, dark: 0x51442F) : Color.theme(light: 0xDCEDE2, dark: 0x2E403A), in: .circle)
+                        Rectangle().fill(Color.panelInk.opacity(0.09)).frame(width: 1, height: 39)
                     }.allowsHitTesting(false)
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 7) {
                             Text(event.agent.uppercased())
                                 .font(.system(size: 10, weight: .semibold, design: .monospaced)).tracking(1)
-                                .foregroundStyle(Color(hex: 0xC1C9CD))
+                                .foregroundStyle(Color.theme(light: 0x46545B, dark: 0xC1C9CD))
                                 .lineLimit(1)
                             if !event.project.isEmpty {
                                 Text("/ " + event.project).font(.system(size: 10, design: .monospaced))
@@ -81,13 +81,13 @@ private struct NotificationRow: View {
                             }
                         }.allowsHitTesting(false)
                         MessagePreview(text: event.title, size: 16,
-                            color: NSColor(srgbRed: 0.933, green: 0.945, blue: 0.925, alpha: 1),
+                            color: NSColor.theme(light: 0x222A2E, dark: 0xEEF1EC),
                             lines: 2, characterLimit: 160, onOpenSource: onOpen)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         HStack(spacing: 5) {
                             if !event.detail.isEmpty {
                                 MessagePreview(text: event.detail, size: 11,
-                                    color: NSColor(srgbRed: 0.643, green: 0.686, blue: 0.702, alpha: 1),
+                                    color: NSColor.theme(light: 0x59666C, dark: 0xA4AFB3),
                                     lines: 1, characterLimit: 400, onOpenSource: onOpen)
                                 Text("·").allowsHitTesting(false)
                             }
@@ -97,7 +97,7 @@ private struct NotificationRow: View {
                     Spacer(minLength: 0)
                     Button(action: onOpen) {
                         Image(systemName: "arrow.up.right").font(.system(size: 12))
-                            .foregroundStyle(hovered ? Color.white : muted)
+                            .foregroundStyle(hovered ? Color.panelInk : muted)
                     }.buttonStyle(.plain).padding(.top, 25).accessibilityLabel(sourceAction)
                 }.padding(.vertical, 4)
                 .background {
@@ -109,17 +109,17 @@ private struct NotificationRow: View {
                 .help("\(sourceAction) · \(MessageText.plain(event.title)) · \(event.date.formatted(date: .abbreviated, time: .shortened))")
             Button(action: onDismiss) {
                 Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(dismissHovered ? Color.white : muted)
+                    .foregroundStyle(dismissHovered ? Color.panelInk : muted)
                     .frame(width: 24, height: 24)
-                    .background(.white.opacity(dismissHovered ? 0.14 : 0.035), in: .rect(cornerRadius: 5))
+                    .background(Color.panelInk.opacity(dismissHovered ? 0.14 : 0.035), in: .rect(cornerRadius: 5))
                     .contentShape(.rect)
             }.buttonStyle(.plain).padding(.top, 22)
                 .onHover { dismissHovered = $0 }
                 .help("Dismiss notification")
                 .accessibilityLabel("Dismiss \(event.agent): \(MessageText.plain(event.title, limit: 160))")
         }.padding(.horizontal, 4)
-            .background(.white.opacity(selected ? 0.09 : hovered ? 0.025 : 0), in: .rect(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.white.opacity(selected ? 0.17 : 0)))
+            .background(Color.panelInk.opacity(selected ? 0.09 : hovered ? 0.025 : 0), in: .rect(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.panelInk.opacity(selected ? 0.17 : 0)))
             .accessibilityAddTraits(selected ? .isSelected : [])
             .contextMenu {
                 Button("Open Source", action: onOpen)
@@ -141,7 +141,7 @@ private struct NotificationRow: View {
     let onSize: (CGSize) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
-    private let muted = Color(hex: 0xA4AFB3)
+    private let muted = Color.panelMuted
     private var headline: String {
         if model.items.isEmpty { return "You're all caught up." }
         return model.completed.isEmpty ? "Your agents need you." : "Your agents are back."
@@ -184,7 +184,7 @@ private struct NotificationRow: View {
                     Text("SPLASH FINISH").font(.system(size: 11, weight: .semibold, design: .monospaced)).tracking(2)
                 }
                 Spacer()
-                Circle().fill(Color(hex: 0xE7BB74)).frame(width: 5, height: 5)
+                Circle().fill(Color.panelAccent).frame(width: 5, height: 5)
                 Text(String(format: "%02d / INBOX", model.items.count))
                     .font(.system(size: 10, design: .monospaced)).tracking(1).foregroundStyle(muted)
             }
@@ -208,7 +208,7 @@ private struct NotificationRow: View {
                     Text("Nothing waiting. You're free to focus.")
                 }.font(.system(size: 12)).foregroundStyle(muted).padding(.vertical, 28)
             }
-            Rectangle().fill(.white.opacity(0.12)).frame(height: 1).padding(.top, 17)
+            Rectangle().fill(Color.panelInk.opacity(0.12)).frame(height: 1).padding(.top, 17)
             HStack {
                 Button { model.snooze() } label: {
                     HStack(spacing: 7) {
@@ -227,22 +227,21 @@ private struct NotificationRow: View {
                     .help("Clear notifications; pending questions remain · Backspace or ⌘W")
             }.padding(.top, 17)
             Text(footnote)
-                .font(.system(size: 10)).foregroundStyle(model.message == nil ? muted : Color(hex: 0xF0C37A))
+                .font(.system(size: 10)).foregroundStyle(model.message == nil ? muted : Color.panelAccent)
                 .lineLimit(2).padding(.top, 13)
         }.padding(25).frame(width: 470)
-            .foregroundStyle(Color(hex: 0xE9EEE9))
-            .background(Color(hex: 0x222A2E), in: .rect(cornerRadius: 17))
-            .overlay(RoundedRectangle(cornerRadius: 17).strokeBorder(Color(hex: contrast == .increased ? 0xA0B0B4 : 0x526064), lineWidth: 0.75))
+            .foregroundStyle(Color.theme(light: 0x222A2E, dark: 0xE9EEE9))
+            .background(Color.theme(light: 0xF7F8F5, dark: 0x222A2E), in: .rect(cornerRadius: 17))
+            .overlay(RoundedRectangle(cornerRadius: 17).strokeBorder(Color.theme(light: contrast == .increased ? 0x46545B : 0xB3BEC1, dark: contrast == .increased ? 0xA0B0B4 : 0x526064), lineWidth: 0.75))
             .fixedSize(horizontal: true, vertical: true)
             .background(GeometryReader { proxy in
                 Color.clear.onChange(of: proxy.size, initial: true) { _, size in onSize(size) }
             })
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: model.items.count)
-            .environment(\.colorScheme, .dark)
     }
     private var groups: some View {
         VStack(spacing: 22) {
-            if !model.attention.isEmpty { group("NEEDS ATTENTION", items: model.attention, color: Color(hex: 0xE7BB74)) }
+            if !model.attention.isEmpty { group("NEEDS ATTENTION", items: model.attention, color: Color.panelAccent) }
             if !model.completed.isEmpty { group("COMPLETED", items: model.completed, color: muted) }
         }
     }

@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import ServiceManagement
 import Sparkle
 import SplashFinishCore
 
@@ -35,9 +34,9 @@ private final class SplashPanel: NSPanel {
     private var appLock: FileLock?
     private var panelSize = CGSize(width: 470, height: 350)
     private var integrationsWindow: NSWindow?
+    private var settingsWindow: NSWindow?
     private var updater: SPUStandardUpdaterController?
     private var hotKey: GlobalHotKey?
-    private var startAtLoginItem: NSMenuItem?
     private var pendingURLs = [URL]()
     private var observers = [NSObjectProtocol]()
     /// Programmatic frame changes also post didMove; only user drags are remembered.
@@ -46,6 +45,7 @@ private final class SplashPanel: NSPanel {
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        AppTheme.applySaved()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         do { appLock = try FileLock(url: AppPaths.support.appendingPathComponent("app.lock"), nonblocking: true) }
@@ -227,13 +227,8 @@ private final class SplashPanel: NSPanel {
         menuItem("Clear All Notifications", #selector(clear), "w", in: menu)
         menu.addItem(.separator())
         menuItem("Send Test Notification", #selector(testNotification), "t", in: menu)
+        menuItem("Settings…", #selector(showSettings), ",", in: menu)
         menuItem("Integrations…", #selector(showIntegrations), "i", in: menu)
-        menuItem("Install Agent Skills…", #selector(installSkills), in: menu)
-        menuItem("Uninstall Agent Skills…", #selector(uninstallSkills), in: menu)
-        startAtLoginItem = menuItem("Start at Login", #selector(toggleLogin), in: menu)
-        startAtLoginItem?.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        let focusItem = menuItem("Respect Do Not Disturb", #selector(toggleRespectFocus), in: menu)
-        focusItem.state = model.respectFocus ? .on : .off
         menu.addItem(.separator())
         menuItem("Check for Updates…", #selector(checkForUpdates), in: menu)
         menuItem("About Splash Finish", #selector(about), in: menu)
@@ -276,6 +271,22 @@ private final class SplashPanel: NSPanel {
         NSApp.activate()
         if alert.runModal() == .alertFirstButtonReturn { showIntegrations() }
     }
+    @objc private func showSettings() {
+        if settingsWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 300),
+                                  styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = "Settings"
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView: SettingsView(model: model,
+                installSkills: { [weak self] in self?.changeSkills(install: true) },
+                uninstallSkills: { [weak self] in self?.changeSkills(install: false) }))
+            window.center()
+            settingsWindow = window
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
     @objc private func showIntegrations() {
         if integrationsWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 480),
@@ -290,8 +301,6 @@ private final class SplashPanel: NSPanel {
         integrationsWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate()
     }
-    @objc private func installSkills() { changeSkills(install: true) }
-    @objc private func uninstallSkills() { changeSkills(install: false) }
     private func changeSkills(install: Bool) {
         let alert = NSAlert()
         alert.messageText = install ? "Install agent integrations?" : "Remove agent integrations?"
@@ -315,13 +324,5 @@ private final class SplashPanel: NSPanel {
                                                                richQuestions: install && richQuestions.state == .on)
             let result = NSAlert(); result.messageText = "Splash Finish"; result.informativeText = messages.joined(separator: "\n"); result.runModal()
         } catch { model.report(error); model.show() }
-    }
-    @objc private func toggleLogin() {
-        LoginItem.toggle(model: model, item: startAtLoginItem)
-    }
-    @objc private func toggleRespectFocus(_ sender: NSMenuItem) {
-        model.respectFocus.toggle()
-        UserDefaults.standard.set(model.respectFocus, forKey: "respectFocus")
-        sender.state = model.respectFocus ? .on : .off
     }
 }

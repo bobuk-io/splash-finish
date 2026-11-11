@@ -25,7 +25,7 @@ struct MessagePreview: NSViewRepresentable {
             if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
             if let url = run.link {
                 attributes[.link] = url
-                attributes[.foregroundColor] = NSColor(srgbRed: 0.94, green: 0.765, blue: 0.478, alpha: 1)
+                attributes[.foregroundColor] = NSColor.theme(light: 0x885500, dark: 0xF0C37A)
                 attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
             }
             result.append(NSAttributedString(string: String(parsed[run.range].characters), attributes: attributes))
@@ -39,7 +39,7 @@ struct MessagePreview: NSViewRepresentable {
         view.isSelectable = false
         view.drawsBackground = false
         view.linkTextAttributes = [
-            .foregroundColor: NSColor(srgbRed: 0.94, green: 0.765, blue: 0.478, alpha: 1),
+            .foregroundColor: NSColor.theme(light: 0x885500, dark: 0xF0C37A),
             .underlineStyle: NSUnderlineStyle.single.rawValue
         ]
         view.textContainerInset = .zero
