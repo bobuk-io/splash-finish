@@ -101,7 +101,9 @@ splash-finish uninstall-skills --agent codex
 | Codex | user skill and `~/.codex/hooks.json` hooks | `Stop` and `PermissionRequest`; `/hooks` trust required |
 | pi | user skill and `~/.pi/agent/extensions/splash-finish.ts` | settled, extension UI prompts, common question tools, errors and interruption |
 
-Pi notifications are fire-and-forget and never delay the agent. Subagent sessions (pi-subagents background children and in-process `run-N` sessions) are filtered: only requests for input are forwarded, so a fan-out of workers does not flood the inbox.
+Pi notifications are fire-and-forget and never delay the agent. User-opened menus while Pi is idle (such as `/jewter`) do not trigger attention notifications or clear completed items; blocking dialogs during an active agent run still report requests for input. Subagent sessions (pi-subagents background children and in-process `run-N` sessions) are filtered: only requests for input are forwarded, so a fan-out of workers does not flood the inbox.
+
+Set `SPLASH_FINISH_DISABLED=1` in managed worker processes (for example pi-selecta workers) to suppress their lifecycle hooks, rich questions and explicit `notify` calls. Leave it unset in the coordinator so only the coordinator asks the human and reports completion. Available in 0.3.8 and later. Pi integrations, installed hook shell guards, and the CLI honor this opt-out. After updating, reinstall integrations with `splash-finish install-skills` and run `/reload` in existing Pi sessions.
 
 Completions mean **the agent stopped responding**, not that its claims or tests were independently verified. Agent hook APIs and external tools vary by version; not every possible request for input is observable. Background agents, remote containers and hosts that do not expose the local macOS app may need to send events explicitly. Claude Code can emit the sandbox network permission notification after a delay. Other installed hooks may change agent behavior after a `Stop` event; Splash Finish is only an observer and cannot predict subsequent continuation.
 

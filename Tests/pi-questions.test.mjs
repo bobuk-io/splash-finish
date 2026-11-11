@@ -11,6 +11,11 @@ try {
   const file = join(dir, 'questions.ts');
   await writeFile(file, source.replace('__EXECUTABLE_JSON__', JSON.stringify('/no/app')));
   const { registerQuestions, present } = await import(pathToFileURL(file).href);
+  const previousDisabled = process.env.SPLASH_FINISH_DISABLED;
+  process.env.SPLASH_FINISH_DISABLED = '1';
+  registerQuestions({ on() { assert.fail('disabled worker must not register lifecycle hooks'); }, events: { on() { assert.fail('disabled worker must not subscribe to questions'); } } });
+  if (previousDisabled === undefined) delete process.env.SPLASH_FINISH_DISABLED;
+  else process.env.SPLASH_FINISH_DISABLED = previousDisabled;
   const handlers = {}, listeners = {}, forms = [];
   const events = { on(name, fn) { (listeners[name] ??= []).push(fn); }, emit(name, data) { for (const fn of listeners[name] ?? []) fn(data); } };
   registerQuestions({ on(name, fn) { handlers[name] = fn; }, events }, (form, submit) => {

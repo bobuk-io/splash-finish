@@ -106,6 +106,7 @@ export function present(form: Form, submit: (response: unknown) => void, launch 
 }
 
 export function registerQuestions(pi: ExtensionAPI, presentForm = present): void {
+    if (process.env.SPLASH_FINISH_DISABLED === '1') return;
     if (!pi.events?.on) return;
     let context: ExtensionContext | undefined;
     const flows = new Map<string, { transport: Transport; pending?: string; completed: boolean; timer?: ReturnType<typeof setTimeout> }>();

@@ -201,6 +201,33 @@ final class FilesAndInstallerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: extensionURL.path))
         _ = try installer.run(install: false, agents: AgentKind.allCases)
     }
+    func testInstalledHooksHonorWorkerOptOut() throws {
+        let executable = home.appendingPathComponent("worker's app")
+        let log = home.appendingPathComponent("hook-calls.txt")
+        try SafeFiles.write(Data("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HOOK_TEST_LOG\"\n".utf8), to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let guarded = IntegrationInstaller(home: home, environment: [:], executable: executable.path, resources: resources)
+        _ = try guarded.run(install: true, agents: [.claude, .codex])
+        for path in [".claude/settings.json", ".codex/hooks.json"] {
+            let config = try JSONSerialization.jsonObject(with: Data(contentsOf: home.appendingPathComponent(path))) as! [String: Any]
+            let hooks = config["hooks"] as! [String: Any]
+            let groups = hooks["Stop"] as! [[String: Any]]
+            let command = (groups[0]["hooks"] as! [[String: Any]])[0]["command"] as! String
+            for disabled in [nil, "0", "1"] as [String?] {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/bin/sh")
+                process.arguments = ["-c", command]
+                var environment = ["HOOK_TEST_LOG": log.path]
+                environment["SPLASH_FINISH_DISABLED"] = disabled
+                process.environment = environment
+                try process.run(); process.waitUntilExit()
+                XCTAssertEqual(process.terminationStatus, 0)
+            }
+        }
+        let calls = try String(contentsOf: log, encoding: .utf8).split(separator: "\n")
+        XCTAssertEqual(calls.count, 4, "Only unset and 0 invoke each agent hook; 1 must skip the executable")
+        XCTAssertTrue(guarded.inspect(inbox: Inbox()).filter { $0.agent != .pi }.allSatisfy { $0.state == .installed })
+    }
     func testPiAgentAskDetectionAndRecommendations() throws {
         XCTAssertFalse(installer.piAgentAskDetected())
         let settings = home.appendingPathComponent(".pi/agent/settings.json")

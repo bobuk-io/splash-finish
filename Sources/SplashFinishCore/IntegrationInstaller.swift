@@ -65,6 +65,9 @@ public struct IntegrationInstaller {
         return false
     }
     private func quote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+    private func hookCommand(_ agent: AgentKind) -> String {
+        "if [ \"${SPLASH_FINISH_DISABLED:-}\" != 1 ]; then \(quote(executable)) hook \(agent.rawValue) \(marker); fi"
+    }
     private func owned(_ hook: [String: Any]) -> Bool {
         guard let command = hook["command"] as? String else { return false }
         return command.contains(" hook ") && command.contains(" " + marker)
@@ -110,7 +113,7 @@ public struct IntegrationInstaller {
             var events = ["Stop", "PermissionRequest", "UserPromptSubmit", "PostToolUse", "SessionEnd"]
             if agent == .claude { events += ["Notification", "StopFailure"] }
             if agent == .codex { events += ["Interrupt"] }
-            let handler: [String: Any] = ["type": "command", "command": "\(quote(executable)) hook \(agent.rawValue) \(marker)", "timeout": 3]
+            let handler: [String: Any] = ["type": "command", "command": hookCommand(agent), "timeout": 3]
             for event in events {
                 var group: [String: Any] = ["hooks": [handler]]
                 if event == "Notification" { group["matcher"] = "permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input" }
@@ -204,7 +207,7 @@ public struct IntegrationInstaller {
                 let ours = handlers.filter(owned)
                 count += ours.count
                 if !ours.isEmpty { found.insert(eventName) }
-                if ours.contains(where: { ($0["command"] as? String) != "\(quote(executable)) hook \(agent.rawValue) \(marker)" }) {
+                if ours.contains(where: { ($0["command"] as? String) != hookCommand(agent) }) {
                     current = false
                 }
             }

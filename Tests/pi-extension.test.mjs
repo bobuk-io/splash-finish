@@ -10,10 +10,21 @@ try {
   const file = join(temp, 'extension.ts');
   await writeFile(file, source.replace('__EXECUTABLE_JSON__', JSON.stringify('/no/such/binary')));
   const { register } = await import(pathToFileURL(file).href);
+  const previousDisabled = process.env.SPLASH_FINISH_DISABLED;
+  process.env.SPLASH_FINISH_DISABLED = '1';
+  register({ on() { assert.fail('disabled worker must not register lifecycle hooks'); } });
+  if (previousDisabled === undefined) delete process.env.SPLASH_FINISH_DISABLED;
+  else process.env.SPLASH_FINISH_DISABLED = previousDisabled;
   const handlers = {};
   const calls = [];
   register({ on(name, handler) { handlers[name] = handler; } }, async notice => calls.push(notice));
   const ctx = { cwd: '/code/demo', sessionManager: { getSessionId: () => 'session-123' } };
+  // User-opened settings menus (e.g. /jewter) must never notify or clear the inbox.
+  for (const kind of ['custom', 'select', 'confirm', 'input', 'editor']) {
+    await handlers.ui_prompt_start({kind, title: 'Jewter settings'}, ctx);
+    await handlers.ui_prompt_end({}, ctx);
+  }
+  assert.equal(calls.length, 0, 'idle menus must not emit attention or running');
   await handlers.before_agent_start({}, ctx);
   assert.equal(calls.at(-1).status, 'running');
   const firstRun = calls.at(-1).run;
@@ -35,6 +46,9 @@ try {
   assert.equal(calls.at(-1).task, 'session-123');
   assert.equal(calls.at(-1).project, 'demo');
   const count = calls.length;
+  await handlers.ui_prompt_start({kind: 'custom'}, ctx);
+  await handlers.ui_prompt_end({}, ctx);
+  assert.equal(calls.length, count, 'idle menus must preserve the completed notification');
   await handlers.agent_settled({aborted:false}, ctx);
   assert.equal(calls.length, count, 'settled must not notify twice');
   await handlers.before_agent_start({}, ctx);
@@ -67,9 +81,20 @@ try {
   await handlers.before_agent_start({}, child);
   await handlers.agent_settled({aborted:false}, child);
   assert.equal(calls.length, beforeChild, 'child lifecycle events are suppressed');
+  await handlers.before_agent_start({}, child);
   await handlers.ui_prompt_start({title: 'Pick a branch'}, child);
   assert.equal(calls.at(-1).status, 'attention');
   assert.equal(calls.at(-1).task, 'child-1');
+  await handlers.ui_prompt_end({}, child);
+  await handlers.agent_settled({aborted:false}, child);
+
+  // A late dialog-close event must not erase the final completion.
+  await handlers.before_agent_start({}, ctx);
+  await handlers.ui_prompt_start({title: 'Approve?'}, ctx);
+  await handlers.agent_settled({aborted:false}, ctx);
+  const afterSettled = calls.length;
+  await handlers.ui_prompt_end({}, ctx);
+  assert.equal(calls.length, afterSettled, 'late prompt end must not clear completion');
 
   // Background subagents are detected through the environment instead of the session file.
   process.env.PI_SUBAGENT_CHILD = '1';

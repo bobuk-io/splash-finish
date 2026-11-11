@@ -49,9 +49,11 @@ function isChildSession(ctx: ExtensionContext): boolean {
 
 /** The injectable sender also permits lifecycle tests without starting the macOS app. */
 export function register(pi: ExtensionAPI, emit: Sender = send): void {
+    if (process.env.SPLASH_FINISH_DISABLED === "1") return;
     let lastText = "";
     let failed = false;
     let active = false;
+    let awaitingPrompt = false;
     let run = Date.now();
     let sequence = 0;
     // Notifications are fire-and-forget. Awaiting the child process here would delay the
@@ -66,7 +68,7 @@ export function register(pi: ExtensionAPI, emit: Sender = send): void {
         } catch { /* Notifications must never interrupt the agent. */ }
     };
     pi.on("before_agent_start", async (_event, ctx) => {
-        active = true; lastText = ""; failed = false;
+        active = true; awaitingPrompt = false; lastText = ""; failed = false;
         run = Math.max(Date.now(), run + 1); sequence = 0;
         notice(ctx, "running", "Working");
     });
@@ -87,9 +89,18 @@ export function register(pi: ExtensionAPI, emit: Sender = send): void {
             failed ? "Open the session for details" : "Ready for review");
     });
     pi.on("ui_prompt_start", async (event, ctx) => {
+        // Slash-command menus also emit these events. Only an active agent run
+        // can be blocked on an answer; browsing settings while idle is not attention.
+        if (!active) return;
+        awaitingPrompt = true;
         notice(ctx, "attention", event.title || "Waiting for your input", "An agent needs your answer");
     });
-    pi.on("ui_prompt_end", async (_event, ctx) => { notice(ctx, "running", "Working"); });
+    pi.on("ui_prompt_end", async (_event, ctx) => {
+        if (!awaitingPrompt) return;
+        awaitingPrompt = false;
+        // A late close must not erase a completion already delivered by agent_settled.
+        if (active) notice(ctx, "running", "Working");
+    });
     pi.on("tool_call", async (event, ctx) => {
         if (["ask_user", "question", "questionnaire"].includes(event.toolName)) {
             notice(ctx, "attention", "Waiting for your input", "An agent needs your answer");

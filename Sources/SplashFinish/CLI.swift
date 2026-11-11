@@ -103,6 +103,8 @@ import SplashFinishCore
     }
     static func run(_ args: [String]) -> Int32 {
         guard let command = args.first else { return 0 }
+        // Managed worker processes must never notify the human directly.
+        if ["hook", "notify"].contains(command), ProcessInfo.processInfo.environment["SPLASH_FINISH_DISABLED"] == "1" { return 0 }
         // Hook output must never deny tools, alter prompts or fail the agent's run.
         if command == "hook" {
             do {
