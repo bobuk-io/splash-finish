@@ -105,7 +105,90 @@ try {
     assert.equal(calls.length, beforeEnvChild, 'PI_SUBAGENT_CHILD lifecycle events are suppressed');
   } finally { delete process.env.PI_SUBAGENT_CHILD; }
   assert.ok(calls.length > 0);
-  console.log('PASS: pi lifecycle, approval prompts, completion, error, abort, deduplication and subagent filtering');
+
+  // Selecta autonomous mode: globalThis[Symbol.for('pi-selecta.autonomy')], raw session id.
+  const AUTONOMY = Symbol.for('pi-selecta.autonomy');
+  const settleWith = async (state, stopReason = 'stop', target = ctx) => {
+    if (state === undefined) delete globalThis[AUTONOMY]; else globalThis[AUTONOMY] = state;
+    await handlers.before_agent_start({}, target);
+    await handlers.message_end({message:{role:'assistant', content:[{type:'text', text:'Merged.'}], stopReason}}, target);
+    const before = calls.length;
+    await handlers.agent_settled({aborted:false}, target);
+    return calls.slice(before);
+  };
+  const on = { version: 1, sessionId: 'session-123', on: true, by: '/selecta auto' };
+  try {
+    assert.deepEqual(await settleWith(on), [], 'autonomous completion is silent');
+    assert.deepEqual(await settleWith(on, 'error'), [], 'autonomous generic error is silent');
+    // Missing, malformed, other-version, other-session or off state keeps normal notices.
+    for (const state of [undefined, null, 'on', 42, {}, { ...on, version: 2 }, { ...on, version: '1' },
+      { ...on, on: 'true' }, { ...on, on: false }, { ...on, sessionId: 'other-session' },
+      { ...on, sessionId: 'session_123' }, { ...on, sessionId: '' }, { ...on, sessionId: 123 }]) {
+      const sent = await settleWith(state);
+      assert.equal(sent.length, 1, `normal completion for ${JSON.stringify(state)}`);
+      assert.equal(sent[0].status, 'done');
+      assert.equal((await settleWith(state, 'error'))[0].status, 'attention');
+    }
+    // A throwing getter must not break the agent or hide the completion.
+    const hostile = {}; Object.defineProperty(hostile, 'version', { get() { throw new Error('boom'); } });
+    assert.equal((await settleWith(hostile))[0].status, 'done');
+
+    // Actual questions still raise attention during an autonomous run.
+    globalThis[AUTONOMY] = on;
+    await handlers.before_agent_start({}, ctx);
+    await handlers.ui_prompt_start({title: 'Approve resume?'}, ctx);
+    assert.equal(calls.at(-1).status, 'attention');
+    assert.equal(calls.at(-1).title, 'Approve resume?');
+    await handlers.ui_prompt_end({}, ctx);
+    assert.equal(calls.at(-1).status, 'running');
+    await handlers.tool_call({toolName:'ask_user'}, ctx);
+    assert.equal(calls.at(-1).status, 'attention');
+    await handlers.tool_execution_end({toolName:'ask_user'}, ctx);
+    // A question still open at settle is preserved; its own close clears it later.
+    await handlers.ui_prompt_start({title: 'Pick a branch'}, ctx);
+    const open = calls.length;
+    await handlers.agent_settled({aborted:false}, ctx);
+    assert.equal(calls.length, open, 'settle keeps the open question');
+    assert.equal(calls.at(-1).status, 'attention');
+    await handlers.ui_prompt_end({}, ctx);
+    assert.equal(calls.at(-1).status, 'running', 'the answered question is cleared');
+    const closed = calls.length;
+    await handlers.ui_prompt_end({}, ctx);
+    assert.equal(calls.length, closed, 'clear only once');
+    // An abort still clears the running entry.
+    await handlers.before_agent_start({}, ctx);
+    await handlers.agent_settled({aborted:true}, ctx);
+    assert.equal(calls.at(-1).status, 'running');
+    // Idle menus stay quiet in autonomous mode too.
+    const idle = calls.length;
+    await handlers.ui_prompt_start({kind: 'select'}, ctx);
+    await handlers.ui_prompt_end({}, ctx);
+    assert.equal(calls.length, idle);
+    // Autonomy turned off mid-session: the next completion is normal again.
+    assert.equal((await settleWith({ ...on, on: false }))[0].status, 'done');
+
+    // Late loading: an instance registered after the record exists, and a record that
+    // appears after registration, are both read at settle time.
+    globalThis[AUTONOMY] = on;
+    const late = {}; const lateCalls = [];
+    register({ on(name, handler) { late[name] = handler; } }, async notice => lateCalls.push(notice));
+    await late.before_agent_start({}, ctx);
+    await late.agent_settled({aborted:false}, ctx);
+    assert.deepEqual(lateCalls.map(c => c.status), ['running']);
+    delete globalThis[AUTONOMY];
+    const early = {}; const earlyCalls = [];
+    register({ on(name, handler) { early[name] = handler; } }, async notice => earlyCalls.push(notice));
+    globalThis[AUTONOMY] = on;
+    await early.before_agent_start({}, ctx);
+    await early.agent_settled({aborted:false}, ctx);
+    assert.deepEqual(earlyCalls.map(c => c.status), ['running']);
+    // Session switch: the record names the old session, so the new session notifies.
+    const switched = { cwd: '/code/demo', sessionManager: { getSessionId: () => 'session-456' } };
+    const sent = await settleWith(on, 'stop', switched);
+    assert.equal(sent[0].status, 'done');
+    assert.equal(sent[0].task, 'session-456');
+  } finally { delete globalThis[AUTONOMY]; }
+  console.log('PASS: pi lifecycle, approval prompts, completion, error, abort, deduplication, subagent filtering and Selecta autonomy');
 } finally {
   await rm(temp, { recursive: true, force: true });
 }

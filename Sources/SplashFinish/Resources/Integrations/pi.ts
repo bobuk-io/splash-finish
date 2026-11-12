@@ -47,6 +47,23 @@ function isChildSession(ctx: ExtensionContext): boolean {
     } catch { return false; }
 }
 
+/**
+ * pi-selecta publishes its autonomous mode as a frozen version 1 record:
+ * globalThis[Symbol.for("pi-selecta.autonomy")] = { version: 1, sessionId, on, by }.
+ * sessionId is the raw Pi session id. The record is read on every settle, so the load
+ * order of the two extensions does not matter. A missing, malformed, other-version or
+ * other-session record means "not autonomous": normal notices stay unchanged.
+ */
+const AUTONOMY = Symbol.for("pi-selecta.autonomy");
+function isAutonomous(ctx: ExtensionContext): boolean {
+    try {
+        const state = (globalThis as Record<symbol, unknown>)[AUTONOMY] as { version?: unknown; sessionId?: unknown; on?: unknown } | undefined;
+        if (!state || typeof state !== "object" || state.version !== 1 || state.on !== true) return false;
+        const id = ctx.sessionManager.getSessionId();
+        return typeof state.sessionId === "string" && state.sessionId !== "" && state.sessionId === id;
+    } catch { return false; }
+}
+
 /** The injectable sender also permits lifecycle tests without starting the macOS app. */
 export function register(pi: ExtensionAPI, emit: Sender = send): void {
     if (process.env.SPLASH_FINISH_DISABLED === "1") return;
@@ -54,6 +71,8 @@ export function register(pi: ExtensionAPI, emit: Sender = send): void {
     let failed = false;
     let active = false;
     let awaitingPrompt = false;
+    // An autonomous settle sent nothing. A prompt that closes later clears its own attention.
+    let quietSettle = false;
     let run = Date.now();
     let sequence = 0;
     // Notifications are fire-and-forget. Awaiting the child process here would delay the
@@ -68,7 +87,7 @@ export function register(pi: ExtensionAPI, emit: Sender = send): void {
         } catch { /* Notifications must never interrupt the agent. */ }
     };
     pi.on("before_agent_start", async (_event, ctx) => {
-        active = true; awaitingPrompt = false; lastText = ""; failed = false;
+        active = true; awaitingPrompt = false; quietSettle = false; lastText = ""; failed = false;
         run = Math.max(Date.now(), run + 1); sequence = 0;
         notice(ctx, "running", "Working");
     });
@@ -84,6 +103,9 @@ export function register(pi: ExtensionAPI, emit: Sender = send): void {
         if (!active) return;
         active = false;
         if (event.aborted) { notice(ctx, "running", "Interrupted"); return; }
+        // In Selecta autonomous mode the human has nothing to answer: no completion and no
+        // generic error. Questions (ui_prompt_start, ask_user) still raise attention.
+        if (isAutonomous(ctx)) { quietSettle = awaitingPrompt; return; }
         notice(ctx, failed ? "attention" : "done",
             failed ? "Agent stopped with an error" : messagePreview(lastText) || "Response completed",
             failed ? "Open the session for details" : "Ready for review");
@@ -100,6 +122,7 @@ export function register(pi: ExtensionAPI, emit: Sender = send): void {
         awaitingPrompt = false;
         // A late close must not erase a completion already delivered by agent_settled.
         if (active) notice(ctx, "running", "Working");
+        else if (quietSettle) { quietSettle = false; notice(ctx, "running", "Answered"); }
     });
     pi.on("tool_call", async (event, ctx) => {
         if (["ask_user", "question", "questionnaire"].includes(event.toolName)) {
