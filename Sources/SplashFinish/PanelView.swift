@@ -135,11 +135,33 @@ private struct NotificationRow: View {
     }
 }
 
+/// Keep one live row tree when a question closes or the inbox starts/stops scrolling.
+/// Measure the scroll content instead of switching between two ViewThatFits
+/// candidates that each own AppKit-backed previews.
+struct InboxList<Content: View>: View {
+    let maxHeight: CGFloat
+    @ViewBuilder let content: Content
+    @State private var contentHeight: CGFloat?
+
+    var body: some View {
+        ScrollView {
+            content
+                .fixedSize(horizontal: false, vertical: true)
+                .background(GeometryReader { proxy in
+                    Color.clear.onChange(of: proxy.size.height, initial: true) { _, height in
+                        contentHeight = height
+                    }
+                })
+        }
+        .scrollIndicators(.automatic)
+        .frame(height: min(contentHeight ?? maxHeight, maxHeight))
+    }
+}
+
 @MainActor struct PanelView: View {
     let model: AppModel
     let onOpen: (AgentEvent) -> Void
     let onSize: (CGSize) -> Void
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
     private let muted = Color.panelMuted
     private var headline: String {
@@ -192,12 +214,8 @@ private struct NotificationRow: View {
                 .font(.system(size: 27, weight: .medium)).tracking(-0.7).padding(.top, 18)
             Text(subtitle).font(.system(size: 12)).foregroundStyle(muted).padding(.top, 7)
             if !model.items.isEmpty {
-                // viewThatFits keeps a short inbox intrinsically sized; only long lists scroll.
                 ScrollViewReader { proxy in
-                    ViewThatFits(in: .vertical) {
-                        groups.fixedSize(horizontal: false, vertical: true)
-                        ScrollView { groups }.scrollIndicators(.automatic)
-                    }
+                    InboxList(maxHeight: model.maxListHeight) { groups }
                     .onChange(of: model.selectedKey) { _, key in
                         if let key { proxy.scrollTo(key, anchor: .center) }
                     }
@@ -237,7 +255,9 @@ private struct NotificationRow: View {
             .background(GeometryReader { proxy in
                 Color.clear.onChange(of: proxy.size, initial: true) { _, size in onSize(size) }
             })
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.16), value: model.items.count)
+            // Native previews must move with their SwiftUI rows, not through a
+            // separate removal animation while AppKit resizes the host window.
+            .transaction { $0.animation = nil }
     }
     private var groups: some View {
         VStack(spacing: 22) {

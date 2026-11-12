@@ -157,7 +157,10 @@ private final class SplashPanel: NSPanel {
         }
         // Growing keeps the top edge, so this is not a move worth remembering.
         isPlacingPanel = true
-        panel.setFrame(frame, display: true, animate: panel.isVisible && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        // SwiftUI has already laid out the smaller inbox. AppKit frame animation
+        // would resize its host again through intermediate sizes while native
+        // text previews and SwiftUI row layers update on different schedules.
+        panel.setFrame(frame, display: true)
         isPlacingPanel = false
     }
     private func update(reveal: Bool) {
