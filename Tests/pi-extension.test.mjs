@@ -106,10 +106,12 @@ try {
   } finally { delete process.env.PI_SUBAGENT_CHILD; }
   assert.ok(calls.length > 0);
 
-  // Selecta autonomous mode: globalThis[Symbol.for('pi-selecta.autonomy')], raw session id.
+  // Selecta autonomous mode: globalThis[Symbol.for('pi-selecta.autonomy')] is a Map
+  // from the raw Pi session id to { version: 1, sessionId, on, by }.
   const AUTONOMY = Symbol.for('pi-selecta.autonomy');
-  const settleWith = async (state, stopReason = 'stop', target = ctx) => {
-    if (state === undefined) delete globalThis[AUTONOMY]; else globalThis[AUTONOMY] = state;
+  const map = (...records) => new Map(records.map(r => [r.sessionId, r]));
+  const settleWith = async (sessions, stopReason = 'stop', target = ctx) => {
+    if (sessions === undefined) delete globalThis[AUTONOMY]; else globalThis[AUTONOMY] = sessions;
     await handlers.before_agent_start({}, target);
     await handlers.message_end({message:{role:'assistant', content:[{type:'text', text:'Merged.'}], stopReason}}, target);
     const before = calls.length;
@@ -117,24 +119,44 @@ try {
     return calls.slice(before);
   };
   const on = { version: 1, sessionId: 'session-123', on: true, by: '/selecta auto' };
+  const keyed = record => new Map([['session-123', record]]);
   try {
-    assert.deepEqual(await settleWith(on), [], 'autonomous completion is silent');
-    assert.deepEqual(await settleWith(on, 'error'), [], 'autonomous generic error is silent');
-    // Missing, malformed, other-version, other-session or off state keeps normal notices.
-    for (const state of [undefined, null, 'on', 42, {}, { ...on, version: 2 }, { ...on, version: '1' },
-      { ...on, on: 'true' }, { ...on, on: false }, { ...on, sessionId: 'other-session' },
-      { ...on, sessionId: 'session_123' }, { ...on, sessionId: '' }, { ...on, sessionId: 123 }]) {
-      const sent = await settleWith(state);
-      assert.equal(sent.length, 1, `normal completion for ${JSON.stringify(state)}`);
+    assert.deepEqual(await settleWith(map(on)), [], 'autonomous completion is silent');
+    assert.deepEqual(await settleWith(map(on), 'error'), [], 'autonomous generic error is silent');
+    // Missing or malformed maps, and missing, malformed, other-version, mismatched or off
+    // entries keep normal notices. A bare record (no map) and a plain object are malformed.
+    for (const sessions of [undefined, null, 'on', 42, {}, on, { 'session-123': on }, new Map(),
+      map({ ...on, sessionId: 'other-session' }), keyed(null), keyed('on'), keyed({}),
+      keyed({ ...on, version: 2 }), keyed({ ...on, version: '1' }), keyed({ ...on, on: 'true' }),
+      keyed({ ...on, on: false }), keyed({ ...on, sessionId: 'other-session' }),
+      keyed({ ...on, sessionId: 'session_123' }), keyed({ ...on, sessionId: '' }), keyed({ ...on, sessionId: 123 })]) {
+      const label = sessions instanceof Map ? JSON.stringify([...sessions]) : JSON.stringify(sessions);
+      const sent = await settleWith(sessions);
+      assert.equal(sent.length, 1, `normal completion for ${label}`);
       assert.equal(sent[0].status, 'done');
-      assert.equal((await settleWith(state, 'error'))[0].status, 'attention');
+      assert.equal((await settleWith(sessions, 'error'))[0].status, 'attention');
     }
-    // A throwing getter must not break the agent or hide the completion.
+    // Throwing getters must not break the agent or hide the completion.
     const hostile = {}; Object.defineProperty(hostile, 'version', { get() { throw new Error('boom'); } });
-    assert.equal((await settleWith(hostile))[0].status, 'done');
+    assert.equal((await settleWith(keyed(hostile)))[0].status, 'done');
+    class HostileMap extends Map { get() { throw new Error('boom'); } }
+    assert.equal((await settleWith(new HostileMap([['session-123', on]])))[0].status, 'done');
+
+    // Parent and in-process child sessions publish separate entries in one process.
+    // A child entry, or its removal, never changes the parent's mode.
+    const other = { cwd: '/code/demo', sessionManager: { getSessionId: () => 'session-456' } };
+    const shared = map(on, { version: 1, sessionId: 'session-456', on: false, by: 'default' });
+    assert.deepEqual(await settleWith(shared), [], 'parent stays autonomous beside a child entry');
+    assert.equal((await settleWith(shared, 'stop', other))[0].status, 'done', 'the other session notifies');
+    shared.delete('session-456');
+    assert.deepEqual(await settleWith(shared), [], 'child removal keeps parent autonomy');
+    shared.set('session-456', { version: 1, sessionId: 'session-456', on: true, by: 'dashboard' });
+    shared.set('session-123', { ...on, on: false });
+    assert.deepEqual(await settleWith(shared, 'stop', other), [], 'the other session is autonomous');
+    assert.equal((await settleWith(shared))[0].status, 'done', 'the parent is not');
 
     // Actual questions still raise attention during an autonomous run.
-    globalThis[AUTONOMY] = on;
+    globalThis[AUTONOMY] = map(on);
     await handlers.before_agent_start({}, ctx);
     await handlers.ui_prompt_start({title: 'Approve resume?'}, ctx);
     assert.equal(calls.at(-1).status, 'attention');
@@ -165,11 +187,11 @@ try {
     await handlers.ui_prompt_end({}, ctx);
     assert.equal(calls.length, idle);
     // Autonomy turned off mid-session: the next completion is normal again.
-    assert.equal((await settleWith({ ...on, on: false }))[0].status, 'done');
+    assert.equal((await settleWith(map({ ...on, on: false })))[0].status, 'done');
 
     // Late loading: an instance registered after the record exists, and a record that
     // appears after registration, are both read at settle time.
-    globalThis[AUTONOMY] = on;
+    globalThis[AUTONOMY] = map(on);
     const late = {}; const lateCalls = [];
     register({ on(name, handler) { late[name] = handler; } }, async notice => lateCalls.push(notice));
     await late.before_agent_start({}, ctx);
@@ -178,13 +200,13 @@ try {
     delete globalThis[AUTONOMY];
     const early = {}; const earlyCalls = [];
     register({ on(name, handler) { early[name] = handler; } }, async notice => earlyCalls.push(notice));
-    globalThis[AUTONOMY] = on;
+    globalThis[AUTONOMY] = map(on);
     await early.before_agent_start({}, ctx);
     await early.agent_settled({aborted:false}, ctx);
     assert.deepEqual(earlyCalls.map(c => c.status), ['running']);
     // Session switch: the record names the old session, so the new session notifies.
     const switched = { cwd: '/code/demo', sessionManager: { getSessionId: () => 'session-456' } };
-    const sent = await settleWith(on, 'stop', switched);
+    const sent = await settleWith(map(on), 'stop', switched);
     assert.equal(sent[0].status, 'done');
     assert.equal(sent[0].task, 'session-456');
   } finally { delete globalThis[AUTONOMY]; }

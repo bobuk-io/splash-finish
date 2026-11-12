@@ -48,19 +48,23 @@ function isChildSession(ctx: ExtensionContext): boolean {
 }
 
 /**
- * pi-selecta publishes its autonomous mode as a frozen version 1 record:
- * globalThis[Symbol.for("pi-selecta.autonomy")] = { version: 1, sessionId, on, by }.
- * sessionId is the raw Pi session id. The record is read on every settle, so the load
- * order of the two extensions does not matter. A missing, malformed, other-version or
- * other-session record means "not autonomous": normal notices stay unchanged.
+ * pi-selecta publishes its autonomous mode per Pi session in one process:
+ * globalThis[Symbol.for("pi-selecta.autonomy")] is a Map from the raw Pi session id to a
+ * frozen record { version: 1, sessionId, on, by }. Parent and in-process child sessions
+ * each have their own entry. The map is read on every settle, so the load order of the two
+ * extensions does not matter. A missing or malformed map, or a missing, malformed,
+ * other-version or mismatched entry means "not autonomous": normal notices stay unchanged.
  */
 const AUTONOMY = Symbol.for("pi-selecta.autonomy");
 function isAutonomous(ctx: ExtensionContext): boolean {
     try {
-        const state = (globalThis as Record<symbol, unknown>)[AUTONOMY] as { version?: unknown; sessionId?: unknown; on?: unknown } | undefined;
-        if (!state || typeof state !== "object" || state.version !== 1 || state.on !== true) return false;
+        const sessions = (globalThis as Record<symbol, unknown>)[AUTONOMY];
+        if (!(sessions instanceof Map)) return false;
         const id = ctx.sessionManager.getSessionId();
-        return typeof state.sessionId === "string" && state.sessionId !== "" && state.sessionId === id;
+        if (typeof id !== "string" || id === "") return false;
+        const state = sessions.get(id) as { version?: unknown; sessionId?: unknown; on?: unknown } | undefined;
+        if (!state || typeof state !== "object" || state.version !== 1 || state.on !== true) return false;
+        return state.sessionId === id;
     } catch { return false; }
 }
 
