@@ -145,6 +145,36 @@ final class EventTests: XCTestCase {
         XCTAssertTrue(event.title.hasPrefix("hello world "))
         XCTAssertEqual(MessageText.plain(event.title, limit: 160).count, 161)
     }
+    func testCodexEphemeralHooksAreIgnoredWithoutFilteringAnswerText() throws {
+        for name in ["Stop", "PermissionRequest", "UserPromptSubmit", "PostToolUse", "Interrupt", "SessionEnd"] {
+            var payload: [String: Any] = [
+                "session_id": "background", "hook_event_name": name,
+                "transcript_path": "", "last_assistant_message": "Объяснение Сообщений"
+            ]
+            func parse(_ agent: String = "codex") throws -> AgentEvent? {
+                try HookEvent.parse(agent: agent, input: JSONSerialization.data(withJSONObject: payload))
+            }
+            XCTAssertNil(try parse(), name)
+            payload["transcript_path"] = NSNull()
+            XCTAssertNil(try parse(), name)
+            payload["transcript_path"] = " \n\t"
+            XCTAssertNil(try parse(), name)
+            payload["transcript_path"] = "/tmp/rollout.jsonl"
+            XCTAssertNotNil(try parse(), name)
+            payload.removeValue(forKey: "transcript_path")
+            XCTAssertNotNil(try parse(), name)
+        }
+        // JSON can be a valid user-requested result. Do not filter by content.
+        let payload: [String: Any] = [
+            "session_id": "real", "hook_event_name": "Stop",
+            "transcript_path": "/tmp/rollout.jsonl", "last_assistant_message": "{\"suggestions\":[]}"
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        XCTAssertEqual(try HookEvent.parse(agent: "codex", input: data)?.title, "{\"suggestions\":[]}")
+        var claude = payload
+        claude["transcript_path"] = ""
+        XCTAssertNotNil(try HookEvent.parse(agent: "claude", input: JSONSerialization.data(withJSONObject: claude)))
+    }
     func testHookMapping() throws {
         func parse(_ event: String, extra: [String: Any] = [:], agent: String = "codex") throws -> AgentEvent? {
             var object: [String: Any] = ["session_id": "abc", "hook_event_name": event, "cwd": "/code/backend"]

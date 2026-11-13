@@ -7,6 +7,14 @@ public enum HookEvent {
               let json = try JSONSerialization.jsonObject(with: input) as? [String: Any],
               let session = json["session_id"] as? String, !session.isEmpty,
               let name = json["hook_event_name"] as? String else { return nil }
+        // Codex ephemeral threads have no transcript. Hosts use these for titles
+        // and suggestions; their lifecycle must not create or clear inbox entries.
+        // Keep accepting older payloads that do not include transcript_path.
+        if agent == "codex", let transcript = json["transcript_path"] {
+            if transcript is NSNull { return nil }
+            if let path = transcript as? String,
+               path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
+        }
         let display = agent == "claude" ? "Claude Code" : "Codex"
         let project = (json["cwd"] as? String).map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
         let tool = json["tool_name"] as? String ?? "tool"
