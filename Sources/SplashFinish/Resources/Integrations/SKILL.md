@@ -19,6 +19,6 @@ Use `done` instead of `attention` for a final result. When work resumes, send `-
 
 - Keep titles short and factual. Do not claim success when a task failed or was interrupted.
 - Never include secrets, credentials, full prompts or transcripts. The notification is visible on the user's desktop and its short text is stored locally.
-- `--source-url` is optional: only provide a real session link supported by the originating app. Do not invent a URL. Without one Splash Finish attempts to activate the source application, not a particular tab.
+- `--source-url` is optional: only provide a real session link supported by the originating app. Do not invent a URL. Without one Splash Finish captures inherited Rex session/block IDs and Orca or WezTerm coordinates when available. Otherwise it attempts to activate the source application. Rex exact return requires its local CLI, one local Mac app client, and user-enabled Remote Control.
 - Do not change approval policies or bypass agent trust mechanisms.
 - Notification delivery is best-effort; a failure must not interrupt the actual task.

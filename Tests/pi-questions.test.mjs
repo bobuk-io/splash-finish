@@ -16,6 +16,30 @@ try {
   registerQuestions({ on() { assert.fail('disabled worker must not register lifecycle hooks'); }, events: { on() { assert.fail('disabled worker must not subscribe to questions'); } } });
   if (previousDisabled === undefined) delete process.env.SPLASH_FINISH_DISABLED;
   else process.env.SPLASH_FINISH_DISABLED = previousDisabled;
+  // Capture uses full inherited IDs. Invalid and remote coordinates are omitted.
+  const rexKeys = ['REX_SESSION', 'REX_BLOCK', 'REX_SERVER', 'SSH_CONNECTION', 'SSH_TTY'];
+  const rexPrevious = rexKeys.map(key => process.env[key]);
+  try {
+    const original = {session:'session:01a1d6be-ed97-7d65-b0bf-dbccd7256f1a', block:'block:01a1d9ff-f9a9-7831-b1e9-1187fcbf6756'};
+    for (const [override, expected] of [[{}, original], [{REX_BLOCK:'block:short'}, undefined],
+      [{REX_SESSION:original.session + '\n'}, undefined], [{REX_SERVER:'https://remote'}, undefined],
+      [{SSH_CONNECTION:'remote'}, undefined], [{REX_BLOCK:''}, undefined]]) {
+      rexKeys.forEach(key => delete process.env[key]);
+      Object.assign(process.env, {REX_SESSION:original.session, REX_BLOCK:original.block}, override);
+      const hooks = {}, subscribers = {}; let captured;
+      registerQuestions({on(name, fn) {hooks[name] = fn;}, events:{on(name, fn) {subscribers[name] = fn;}}}, form => {
+        captured = form; return {close() {}, result() {}};
+      });
+      hooks.session_start({}, {cwd:'/code/demo', sessionManager:{getSessionId:() => 'session'}});
+      subscribers['pi-agent-ask:started']({version:1, flowId:'capture', questions:[
+        {id:'q', label:'Q', prompt:'Choose', type:'single', options:[{value:'a', label:'A'}]}
+      ]});
+      assert.deepEqual(captured.rex, expected);
+      hooks.session_shutdown();
+    }
+  } finally {
+    rexKeys.forEach((key, index) => { if (rexPrevious[index] == null) delete process.env[key]; else process.env[key] = rexPrevious[index]; });
+  }
   const handlers = {}, listeners = {}, forms = [];
   const events = { on(name, fn) { (listeners[name] ??= []).push(fn); }, emit(name, data) { for (const fn of listeners[name] ?? []) fn(data); } };
   registerQuestions({ on(name, fn) { handlers[name] = fn; }, events }, (form, submit) => {
@@ -28,13 +52,17 @@ try {
     {id:'one', label:'First', prompt:'Choose', type:'single', options:[{value:'1', label:'One'}, {value:'2', label:'Two'}]},
     {id:'two', label:'Second', prompt:'Choose more', type:'multi', options:[{value:'a',label:'A'}, {value:'b',label:'B'}]}
   ];
-  const orcaEnv = ['ORCA_TERMINAL_HANDLE', 'ORCA_WORKTREE_ID', 'ORCA_PANE_KEY'];
+  const orcaEnv = ['ORCA_TERMINAL_HANDLE', 'ORCA_WORKTREE_ID', 'ORCA_PANE_KEY', 'REX_SESSION', 'REX_BLOCK', 'REX_SERVER', 'SSH_CONNECTION', 'SSH_TTY'];
   const previous = orcaEnv.map(key => process.env[key]);
   try {
+    process.env.REX_SESSION = 'session:01a1d6be-ed97-7d65-b0bf-dbccd7256f1a';
+    process.env.REX_BLOCK = 'block:01a1d9ff-f9a9-7831-b1e9-1187fcbf6756';
+    delete process.env.REX_SERVER; delete process.env.SSH_CONNECTION; delete process.env.SSH_TTY;
     process.env.ORCA_TERMINAL_HANDLE = 'term_original';
     process.env.ORCA_WORKTREE_ID = 'repo-123::/tmp/Project With Spaces';
     process.env.ORCA_PANE_KEY = 'tab-1:leaf-1';
     events.emit('pi-agent-ask:started', {version:1, flowId:'flow-1', questions});
+    assert.deepEqual(forms[0].form.rex, {session:process.env.REX_SESSION, block:process.env.REX_BLOCK});
     assert.deepEqual(forms[0].form.orca, {terminal:'term_original', worktree:'repo-123::/tmp/Project With Spaces', pane:'tab-1:leaf-1'});
   } finally {
     orcaEnv.forEach((key, i) => { if (previous[i] == null) delete process.env[key]; else process.env[key] = previous[i]; });

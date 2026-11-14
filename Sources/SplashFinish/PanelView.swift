@@ -50,6 +50,7 @@ private struct NotificationRow: View {
     private let muted = Color.panelMuted
     private var sourceAction: String {
         if event.source?.url != nil { return "Open source session" }
+        if event.source?.rex != nil { return "Open original Rex terminal pane" }
         if event.source?.orca?.targets.first == .chat { return "Open original Orca chat" }
         if event.source?.orca != nil { return "Open original Orca project and terminal" }
         if event.source?.weztermPane != nil { return "Open WezTerm pane if available" }
