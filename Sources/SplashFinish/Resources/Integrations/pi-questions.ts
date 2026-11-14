@@ -11,7 +11,7 @@ const executable: string = __EXECUTABLE_JSON__;
 const maxBytes = 131072;
 type Question = { id: string; label: string; prompt: string; context?: string; type: 'single' | 'multi'; options: { value: string; label: string; description?: string; recommended?: boolean }[] };
 type OrcaSource = { terminal?: string; worktree?: string; pane?: string };
-type Form = { title?: string; questions: Question[]; project: string; session: string; orca?: OrcaSource };
+type Form = { title?: string; questions: Question[]; project: string; session: string; orca?: OrcaSource; rex?: { session: string; block: string } };
 type Transport = { close(): void; result(ok: boolean, message?: string): void };
 
 function normalize(event: any, ctx: ExtensionContext): Form | undefined {
@@ -37,6 +37,13 @@ function normalize(event: any, ctx: ExtensionContext): Form | undefined {
         if (worktree && Buffer.byteLength(worktree) <= 2048 && !/[\x00-\x1f\x7f]/.test(worktree)) form.orca.worktree = worktree;
         if (pane && /^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/.test(pane) && pane.length <= 256) form.orca.pane = pane;
     }
+    const session = process.env.REX_SESSION, block = process.env.REX_BLOCK;
+    const uuid = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';
+    // Remote Rex terminals cannot be returned to through the local server.
+    if (!process.env.SSH_CONNECTION && !process.env.SSH_TTY &&
+        (!process.env.REX_SERVER || process.env.REX_SERVER.startsWith('unix:///')) &&
+        session && session.length === 44 && new RegExp(`^session:${uuid}$`).test(session) &&
+        block && block.length === 42 && new RegExp(`^block:${uuid}$`).test(block)) form.rex = { session, block };
     if (Buffer.byteLength(JSON.stringify(form)) > maxBytes) return;
     return form;
 }

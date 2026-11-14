@@ -10,9 +10,10 @@ public struct EventSource: Codable, Equatable, Sendable {
     public var url: String?
     public var weztermPane: UInt64?
     public var orca: OrcaSource?
+    public var rex: RexSource?
     public init(pid: Int32? = nil, bundleID: String? = nil, url: String? = nil, weztermPane: UInt64? = nil,
-                orca: OrcaSource? = nil) {
-        self.pid = pid; self.bundleID = bundleID; self.url = url; self.weztermPane = weztermPane; self.orca = orca
+                orca: OrcaSource? = nil, rex: RexSource? = nil) {
+        self.pid = pid; self.bundleID = bundleID; self.url = url; self.weztermPane = weztermPane; self.orca = orca; self.rex = rex
     }
 }
 
@@ -55,6 +56,7 @@ public struct AgentEvent: Codable, Equatable, Identifiable, Sendable {
         if event.title.isEmpty { event.title = status == .attention ? "Needs your attention" : "Work completed" }
         if let link = source?.url, !Self.isSafeSourceURL(link) { throw EventError.invalid("Unsupported source URL scheme") }
         if let orca = source?.orca { _ = try orca.validated() }
+        if let rex = source?.rex { _ = try rex.validated() }
         return event
     }
 
@@ -93,6 +95,8 @@ public enum DeepLink {
             fields["source-bundle"] = source.bundleID
             fields["source-url"] = source.url
             fields["wezterm-pane"] = source.weztermPane.map(String.init)
+            fields["rex-session"] = source.rex?.session
+            fields["rex-block"] = source.rex?.block
             fields["orca-terminal"] = source.orca?.terminal
             fields["orca-worktree"] = source.orca?.worktree
             fields["orca-pane"] = source.orca?.pane
@@ -118,8 +122,10 @@ public enum DeepLink {
         let hasOrca = ["orca-terminal", "orca-worktree", "orca-pane", "orca-session"].contains { fields[$0] != nil }
         let orca = hasOrca ? OrcaSource(terminal: fields["orca-terminal"], worktree: fields["orca-worktree"],
                                         pane: fields["orca-pane"], session: fields["orca-session"]) : nil
+        let hasRex = fields["rex-session"] != nil || fields["rex-block"] != nil
+        let rex = hasRex ? RexSource(session: fields["rex-session"] ?? "", block: fields["rex-block"] ?? "") : nil
         let source = EventSource(pid: fields["source-pid"].flatMap(Int32.init), bundleID: fields["source-bundle"],
-                                 url: fields["source-url"], weztermPane: pane, orca: orca)
+                                 url: fields["source-url"], weztermPane: pane, orca: orca, rex: rex)
         let run = fields["run"].flatMap(Int64.init), sequence = fields["sequence"].flatMap(Int64.init)
         guard (fields["run"] == nil && fields["sequence"] == nil) || (run != nil && sequence != nil) else {
             throw EventError.invalid("Invalid event ordering fields")

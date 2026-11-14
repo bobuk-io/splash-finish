@@ -3,10 +3,12 @@ import Darwin
 import SplashFinishCore
 
 @MainActor enum SourceNavigator {
-    static func capture() -> EventSource? {
-        let env = ProcessInfo.processInfo.environment
-        // Orca's PTY host can obscure its app ancestor. Inherited coordinates are
-        // both more precise and cheaper than walking the process tree.
+    static func capture(environment env: [String: String] = ProcessInfo.processInfo.environment) -> EventSource? {
+        // PTY hosts can obscure the app ancestor. Inherited terminal coordinates
+        // are both more precise and cheaper than walking the process tree.
+        if let rex = RexSource.capture(environment: env) {
+            return EventSource(bundleID: RexSource.bundleID, rex: rex)
+        }
         if let orca = OrcaSource.capture(environment: env) {
             return EventSource(bundleID: OrcaSource.bundleID, orca: orca)
         }
@@ -35,6 +37,13 @@ import SplashFinishCore
     static func open(_ event: AgentEvent, model: AppModel, completion: @escaping (Bool) -> Void) {
         if let raw = event.source?.url, AgentEvent.isSafeSourceURL(raw), let url = URL(string: raw) {
             if NSWorkspace.shared.open(url) { completion(true); return }
+        }
+        if let rex = event.source?.rex {
+            RexNavigator.open(rex) { opened, message in
+                if !opened { model.message = message }
+                completion(opened)
+            }
+            return
         }
         if let orca = event.source?.orca {
             OrcaNavigator.open(orca) { opened in
