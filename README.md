@@ -73,6 +73,8 @@ Agents running in Orca's **built-in chat** have no terminal of their own; they p
 
 Orca is contacted only when you click a notification, not on every agent event. Splash Finish uses the CLI bundled with the installed Orca app, so Finder's `PATH` does not matter, and it opens chats through Orca's own bundled runtime client rather than reimplementing its protocol. If Orca restarted, it re-discovers the same pane using workspace/tab/pane IDs rather than reusing a stale terminal handle. A closed or unresolvable chat or pane produces an unavailable-source message instead of selecting a different agent. Existing notifications created before this support was added cannot recover coordinates retroactively. Remote/paired Orca runtimes are not supported.
 
+New in **0.3.12 (build 18)**: return to the original local Rex pane.
+
 Rex terminals inherit `REX_SESSION` and `REX_BLOCK`. Splash Finish captures both full IDs when the event is sent through manual `notify`, pi, Claude Code or Codex hooks. Rich pi questions also carry these IDs and their “Use pi” action returns to that pane. A click resolves the saved block inside the saved session, then uses these commands (all with `--autostart=false --timeout 3s`):
 
 ```sh
