@@ -192,6 +192,81 @@ final class EventTests: XCTestCase {
         XCTAssertEqual(try parse("Notification", extra: ["notification_type": "permission_prompt"], agent: "claude")?.status, .attention)
         XCTAssertNil(try parse("Unrelated"))
     }
+    func testCopilotHookMappingAndOrdering() throws {
+        let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/CopilotHooks")
+        let source = EventSource(pid: 42)
+        let stop = try XCTUnwrap(HookEvent.parse(agent: "copilot", input: Data(contentsOf: fixtures.appendingPathComponent("stop.json")), source: source, event: "Stop"))
+        let notification = try XCTUnwrap(HookEvent.parse(agent: "copilot", input: Data(contentsOf: fixtures.appendingPathComponent("notification.json")), event: "notification"))
+        XCTAssertEqual(stop.status, .done); XCTAssertEqual(stop.title, "Agent turn ended")
+        XCTAssertEqual(stop.detail, "Background work may continue")
+        XCTAssertEqual(stop.project, "project"); XCTAssertEqual(stop.source, source)
+        XCTAssertEqual(notification.status, .attention); XCTAssertGreaterThan(notification.hookTimestamp!, stop.hookTimestamp!)
+        func parse(_ event: String, _ fields: [String: Any]) throws -> AgentEvent? {
+            try HookEvent.parse(agent: "copilot", input: JSONSerialization.data(withJSONObject: fields), event: event)
+        }
+        let base: [String: Any] = ["session_id": "s", "timestamp": 1000]
+        for event in ["UserPromptSubmit", "PostToolUse", "SessionEnd"] {
+            XCTAssertEqual(try parse(event, base)?.status, .running)
+        }
+        XCTAssertEqual(try parse("PostToolUse", base)?.phase, "copilot-progress")
+        XCTAssertNil(try parse("Stop", ["session_id": "s", "agent_id": "child"]))
+        XCTAssertNil(try parse("Stop", ["session_id": "s", "hook_event_name": "SubagentStop"]))
+        XCTAssertNil(try parse("unknown", base))
+        XCTAssertNil(try parse("Stop", [:]))
+        for kind in ["shell_completed", "agent_idle", "other"] {
+            XCTAssertNil(try parse("notification", ["sessionId": "s", "notification_type": kind]))
+        }
+        XCTAssertEqual(try parse("notification", ["sessionId": "s", "notification_type": "elicitation_dialog"])?.status, .attention)
+        XCTAssertNil(try HookEvent.parse(agent: "copilot", input: Data(repeating: 32, count: 1_048_577), event: "Stop"))
+        var inbox = Inbox()
+        try inbox.receive(notification)
+        let progress = try XCTUnwrap(parse("PostToolUse", ["session_id": "session-1", "timestamp": notification.hookTimestamp! + 1]))
+        try inbox.receive(progress)
+        try inbox.receive(notification)
+        XCTAssertEqual(inbox.items.first?.status, .attention, "An unrelated tool cannot resolve an approval")
+        try inbox.receive(stop)
+        XCTAssertEqual(inbox.items.first?.status, .attention, "An older stop must not overwrite attention")
+        let freshStop = try XCTUnwrap(parse("Stop", ["session_id": "session-1", "timestamp": notification.hookTimestamp! + 2]))
+        try inbox.receive(freshStop)
+        try inbox.receive(progress)
+        XCTAssertEqual(inbox.items.first?.status, .done)
+        try inbox.receive(AgentEvent(task: "session-1", agent: "GitHub Copilot CLI", status: .attention, title: "Manual request"))
+        XCTAssertEqual(inbox.items.first?.title, "Manual request", "Explicit skill notifications remain usable after hooks")
+        let roundTrip = try DeepLink.parse(DeepLink.eventURL(freshStop))
+        XCTAssertEqual(roundTrip.hookTimestamp, freshStop.hookTimestamp)
+        try inbox.receive(AgentEvent(task: "other", agent: "GitHub Copilot CLI", status: .done, title: "Other"))
+        let end = try XCTUnwrap(HookEvent.parse(agent: "copilot", input: Data(contentsOf: fixtures.appendingPathComponent("session-end.json")), event: "SessionEnd"))
+        try inbox.receive(end)
+        XCTAssertEqual(inbox.items.map(\.task), ["other"])
+        XCTAssertNotNil(inbox.lastEvents?["githubcopilotcli"])
+    }
+    func testCopilotProgressDoesNotSuppressDelayedAttentionAndTimestampTies() throws {
+        func parse(_ event: String, _ fields: [String: Any]) throws -> AgentEvent {
+            try XCTUnwrap(HookEvent.parse(agent: "copilot", input: JSONSerialization.data(withJSONObject: fields), event: event))
+        }
+        let progress = try parse("PostToolUse", ["session_id": "s", "timestamp": 2000, "tool_name": "Read"])
+        let attention = try parse("notification", ["sessionId": "s", "timestamp": 1000, "notification_type": "permission_prompt"])
+        let stop = try parse("Stop", ["session_id": "s", "timestamp": 2000])
+        var inbox = Inbox()
+        try inbox.receive(progress)
+        try inbox.receive(attention)
+        XCTAssertEqual(inbox.items.first?.status, .attention, "A parallel tool must not hide a delayed permission request")
+        try inbox.receive(stop)
+        XCTAssertEqual(inbox.items.first?.status, .done)
+        try inbox.receive(progress)
+        XCTAssertEqual(inbox.items.first?.status, .done, "Equal-time progress must not erase a completion")
+
+        var tied = Inbox()
+        let prompt = try parse("UserPromptSubmit", ["session_id": "s", "timestamp": 2000])
+        try tied.receive(prompt)
+        try tied.receive(stop)
+        XCTAssertEqual(tied.items.first?.status, .done, "Distinct events at the same millisecond must not be discarded")
+        try tied.receive(prompt)
+        XCTAssertEqual(tied.items.first?.status, .done, "Replayed IDs remain ignored")
+        let nextStop = try parse("Stop", ["session_id": "s", "timestamp": 2001])
+        XCTAssertTrue(try tied.receive(nextStop), "A later turn must reveal the inbox even if the earlier stop is still visible")
+    }
 }
 
 final class FilesAndInstallerTests: XCTestCase {
@@ -256,7 +331,7 @@ final class FilesAndInstallerTests: XCTestCase {
         }
         let calls = try String(contentsOf: log, encoding: .utf8).split(separator: "\n")
         XCTAssertEqual(calls.count, 4, "Only unset and 0 invoke each agent hook; 1 must skip the executable")
-        XCTAssertTrue(guarded.inspect(inbox: Inbox()).filter { $0.agent != .pi }.allSatisfy { $0.state == .installed })
+        XCTAssertTrue(guarded.inspect(inbox: Inbox()).filter { [.claude, .codex].contains($0.agent) }.allSatisfy { $0.state == .installed })
     }
     func testPiAgentAskDetectionAndRecommendations() throws {
         XCTAssertFalse(installer.piAgentAskDetected())
@@ -299,7 +374,7 @@ final class FilesAndInstallerTests: XCTestCase {
     }
     func testDoctorDetectsInstallOutdatedAndLastEvent() throws {
         var inbox = Inbox()
-        XCTAssertEqual(installer.inspect(inbox: inbox).map(\.state), [.notInstalled, .notInstalled, .notInstalled])
+        XCTAssertEqual(installer.inspect(inbox: inbox).map(\.state), [.notInstalled, .notInstalled, .notInstalled, .notInstalled])
         _ = try installer.run(install: true, agents: [.pi])
         try inbox.receive(AgentEvent(task: "s", agent: "pi", status: .done, title: "done"))
         let installed = installer.inspect(inbox: inbox).last!
@@ -365,5 +440,46 @@ final class FilesAndInstallerTests: XCTestCase {
         XCTAssertEqual(hooks["Stop"]?.first?["custom"] as? String, "metadata")
         XCTAssertEqual((hooks["Stop"]?.first?["hooks"] as? [[String: Any]])?.count, 1)
         XCTAssertEqual(result["description"] as? String, "keep")
+    }
+    func testCopilotManagedFilesAndRepair() throws {
+        let custom = home.appendingPathComponent("custom home")
+        let executable = home.appendingPathComponent("worker's executable")
+        let log = home.appendingPathComponent("calls")
+        try SafeFiles.write(Data("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HOOK_TEST_LOG\"\n".utf8), to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let copilot = IntegrationInstaller(home: home, environment: ["COPILOT_HOME": custom.path], executable: executable.path, resources: resources)
+        let other = custom.appendingPathComponent("hooks/other.json")
+        try SafeFiles.write(Data("user content".utf8), to: other)
+        _ = try copilot.run(install: true, agents: [.copilot])
+        let path = custom.appendingPathComponent("hooks/splash-finish.json")
+        let first = try Data(contentsOf: path)
+        let config = try XCTUnwrap(JSONSerialization.jsonObject(with: first) as? [String: Any])
+        let hooks = try XCTUnwrap(config["hooks"] as? [String: [[String: Any]]])
+        XCTAssertEqual(config["version"] as? Int, 1)
+        XCTAssertEqual(Set(hooks.keys), Set(["Stop", "UserPromptSubmit", "PostToolUse", "SessionEnd", "notification"]))
+        XCTAssertEqual(hooks["notification"]?.first?["matcher"] as? String, "permission_prompt|elicitation_dialog")
+        let command = try XCTUnwrap(hooks["Stop"]?.first?["bash"] as? String)
+        for disabled in ["0", "1"] {
+            let process = Process(); process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", command]
+            process.environment = ["HOOK_TEST_LOG": log.path, "SPLASH_FINISH_DISABLED": disabled]
+            try process.run(); process.waitUntilExit(); XCTAssertEqual(process.terminationStatus, 0)
+        }
+        XCTAssertEqual(try String(contentsOf: log, encoding: .utf8), "hook copilot Stop --managed-splash-finish\n")
+        _ = try copilot.run(install: true, agents: [.copilot])
+        XCTAssertEqual(try Data(contentsOf: path), first)
+        XCTAssertEqual(copilot.inspect(inbox: Inbox()).first { $0.agent == .copilot }?.state, .installed)
+        var edited = config
+        edited["hooks"] = [:]
+        try SafeFiles.write(JSONSerialization.data(withJSONObject: edited), to: path)
+        XCTAssertEqual(copilot.inspect(inbox: Inbox()).first { $0.agent == .copilot }?.state, .updateAvailable)
+        _ = try copilot.run(install: true, agents: [.copilot])
+        XCTAssertEqual(try Data(contentsOf: path), first)
+        _ = try copilot.run(install: false, agents: [.copilot])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: path.path))
+        XCTAssertEqual(try String(contentsOf: other, encoding: .utf8), "user content")
+        try SafeFiles.write(Data("{\"version\":1}".utf8), to: path)
+        XCTAssertThrowsError(try copilot.run(install: true, agents: AgentKind.allCases))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: home.appendingPathComponent(".claude/settings.json").path))
     }
 }

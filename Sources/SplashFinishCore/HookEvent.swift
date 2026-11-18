@@ -1,8 +1,12 @@
 import Foundation
+import CoreFoundation
 
 public enum HookEvent {
     /// Observe lifecycle events only. Never return an approval/denial decision.
-    public static func parse(agent: String, input: Data, source: EventSource? = nil) throws -> AgentEvent? {
+    public static func parse(agent: String, input: Data, source: EventSource? = nil, event: String? = nil) throws -> AgentEvent? {
+        if agent == "copilot" {
+            return try parseCopilot(input: input, source: source, event: event)
+        }
         guard ["claude", "codex"].contains(agent), input.count <= 1_048_576,
               let json = try JSONSerialization.jsonObject(with: input) as? [String: Any],
               let session = json["session_id"] as? String, !session.isEmpty,
@@ -46,5 +50,50 @@ public enum HookEvent {
         return try AgentEvent(task: session, agent: display, status: status, title: title,
                               detail: detail, project: project, source: source,
                               phase: name == "PostToolUse" ? "progress" : nil).validated()
+    }
+
+    private static func parseCopilot(input: Data, source: EventSource?, event: String?) throws -> AgentEvent? {
+        guard input.count <= 1_048_576,
+              let name = event, ["Stop", "UserPromptSubmit", "PostToolUse", "SessionEnd", "notification"].contains(name),
+              let json = try JSONSerialization.jsonObject(with: input) as? [String: Any],
+              let session = (json["session_id"] as? String) ?? (json["sessionId"] as? String), !session.isEmpty,
+              json["agent_id"] == nil, json["agentId"] == nil,
+              json["parent_agent_id"] == nil, json["parentAgentId"] == nil else { return nil }
+        if let payloadName = json["hook_event_name"] as? String,
+           payloadName != (name == "notification" ? "Notification" : name) { return nil }
+        let project = (json["cwd"] as? String).map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
+        let status: EventStatus
+        let title: String
+        let detail: String
+        switch name {
+        case "Stop":
+            status = .done; title = "Agent turn ended"; detail = "Background work may continue"
+        case "notification":
+            guard let kind = json["notification_type"] as? String,
+                  ["permission_prompt", "elicitation_dialog"].contains(kind) else { return nil }
+            status = .attention
+            title = json["title"] as? String ?? "Needs your attention"
+            detail = json["message"] as? String ?? "Waiting for your input"
+        default:
+            status = .running; title = "Working"; detail = ""
+        }
+        var timestamp: Int64?
+        if let number = json["timestamp"] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
+            let value = number.doubleValue
+            if value.isFinite && value >= 0 && value < Double(Int64.max) {
+                timestamp = Int64(value)
+            }
+        } else if let value = json["timestamp"] as? String {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let date = formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+            if let seconds = date?.timeIntervalSince1970, seconds >= 0, seconds < Double(Int64.max) / 1000 {
+                timestamp = Int64((seconds * 1000).rounded())
+            }
+        }
+        let phase = name == "PostToolUse" ? "copilot-progress" : name == "Stop" ? "copilot-stop" : nil
+        return try AgentEvent(task: session, agent: "GitHub Copilot CLI", status: status, title: title,
+                              detail: detail, project: project, source: source,
+                              phase: phase, hookTimestamp: timestamp).validated()
     }
 }

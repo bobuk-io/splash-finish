@@ -33,7 +33,7 @@ import SplashFinishCore
       --sequence INTEGER           Optional sequence within the run
 
     install-skills / uninstall-skills options:
-      --agent all|claude|codex|pi   Default: all
+      --agent all|claude|codex|copilot|pi   Default: all
 
     Examples:
       splash-finish install-skills
@@ -98,19 +98,24 @@ import SplashFinishCore
                 var input = Data()
                 while let chunk = try FileHandle.standardInput.read(upToCount: 16384), !chunk.isEmpty {
                     input.append(chunk)
-                    if input.count > 1_048_576 { print("{}"); return 0 }
+                    if input.count > 1_048_576 {
+                        if args[1] != "copilot" { print("{}") }
+                        return 0
+                    }
                 }
-                if var event = try HookEvent.parse(agent: args[1], input: input) {
+                let discriminator = args[1] == "copilot" && args.count == 4 && args[3] == "--managed-splash-finish" ? args[2] : nil
+                if var event = try HookEvent.parse(agent: args[1], input: input, event: discriminator) {
+                    if event.phase == "copilot-progress" { return 0 }
                     // Claude Code and Codex run a hook on every tool call. A progress event
                     // only clears an existing "working" entry, so skip the process inspection
                     // and the deep link entirely when the inbox has nothing to clear.
-                    if event.status != .running || event.phase != "progress" || hasInboxEntry(event.key) {
+                    if args[1] == "copilot" || event.status != .running || event.phase != "progress" || hasInboxEntry(event.key) {
                         event.source = SourceNavigator.capture()
                         try send(DeepLink.eventURL(event))
                     }
                 }
             } catch { /* Best effort. Nothing agent-facing, no transcript or secret logging. */ }
-            print("{}")
+            if args.count < 2 || args[1] != "copilot" { print("{}") }
             return 0
         }
         do {
@@ -171,7 +176,7 @@ import SplashFinishCore
                 let agents: [AgentKind]
                 if selection == "all" { agents = AgentKind.allCases }
                 else if let agent = AgentKind(rawValue: selection) { agents = [agent] }
-                else { throw EventError.invalid("Agent must be all, claude, codex or pi") }
+                else { throw EventError.invalid("Agent must be all, claude, codex, copilot or pi") }
                 try integrationInstaller().run(install: command == "install-skills", agents: agents).forEach { print($0) }
             default: throw EventError.invalid("Unknown command: \(command). Try splash-finish --help")
             }

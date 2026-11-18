@@ -1,7 +1,7 @@
 import Foundation
 
 public enum AgentKind: String, CaseIterable, Sendable {
-    case claude, codex, pi
+    case claude, codex, copilot, pi
 }
 
 public enum IntegrationState: String, Sendable {
@@ -40,6 +40,7 @@ public struct IntegrationInstaller {
         switch agent {
         case .claude: key = "CLAUDE_CONFIG_DIR"; fallback = ".claude"
         case .codex: key = "CODEX_HOME"; fallback = ".codex"
+        case .copilot: key = "COPILOT_HOME"; fallback = ".copilot"
         case .pi: key = "PI_CODING_AGENT_DIR"; fallback = ".pi/agent"
         }
         return environment[key].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? home.appendingPathComponent(fallback)
@@ -153,6 +154,21 @@ public struct IntegrationInstaller {
         let command = quote(executable)
         let renderedSkill = skill.replacingOccurrences(of: "__COMMAND__", with: command)
         var files = [(root(agent).appendingPathComponent("skills/splash-finish/SKILL.md"), Data(renderedSkill.utf8))]
+        if agent == .copilot {
+            var hooks: [String: [[String: Any]]] = [:]
+            for event in ["Stop", "UserPromptSubmit", "PostToolUse", "SessionEnd", "notification"] {
+                var handler: [String: Any] = [
+                    "type": "command",
+                    "bash": "if [ \"${SPLASH_FINISH_DISABLED:-}\" != 1 ]; then \(command) hook copilot \(event) \(marker); fi",
+                    "timeoutSec": 3
+                ]
+                if event == "notification" { handler["matcher"] = "permission_prompt|elicitation_dialog" }
+                hooks[event] = [handler]
+            }
+            let config: [String: Any] = ["version": 1, "description": fileMarker, "hooks": hooks]
+            let data = try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) + Data([10])
+            files.append((root(agent).appendingPathComponent("hooks/splash-finish.json"), data))
+        }
         if agent == .pi {
             let template = try String(contentsOf: resources.appendingPathComponent("pi.ts"), encoding: .utf8)
             let encoded = String(data: try JSONEncoder().encode(executable), encoding: .utf8)!
@@ -170,6 +186,13 @@ public struct IntegrationInstaller {
     private func checkOwnership(_ url: URL) throws {
         try SafeFiles.check(url)
         if FileManager.default.fileExists(atPath: url.path) {
+            if url.lastPathComponent == "splash-finish.json" {
+                guard let object = try? JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any],
+                      object["description"] as? String == fileMarker else {
+                    throw EventError.invalid("Refusing to overwrite an unmanaged or malformed file: \(url.path)")
+                }
+                return
+            }
             guard let text = try? String(contentsOf: url, encoding: .utf8), text.contains(fileMarker) else {
                 throw EventError.invalid("Refusing to overwrite an unmanaged file: \(url.path)")
             }
@@ -183,6 +206,7 @@ public struct IntegrationInstaller {
         switch agent {
         case .claude: aliases = ["claudecode", "claude code", "claude"]
         case .codex: aliases = ["codex", "codexcli"]
+        case .copilot: aliases = ["githubcopilotcli", "copilotcli", "copilot"]
         case .pi: aliases = ["pi"]
         }
         for alias in aliases where timestamps[alias] != nil { return timestamps[alias] }
@@ -190,7 +214,7 @@ public struct IntegrationInstaller {
     }
     /// Inspect the managed hook entries without touching any files.
     private func hookState(agent: AgentKind) throws -> (present: Bool, current: Bool, count: Int) {
-        guard agent != .pi else { return (true, true, 0) }
+        guard agent != .pi && agent != .copilot else { return (true, true, 0) }
         let config = try readObject(configuration(agent))
         if let raw = config["hooks"], !(raw is [String: Any]) { throw EventError.invalid("Invalid hooks object") }
         let hooks = config["hooks"] as? [String: Any] ?? [:]
@@ -225,9 +249,9 @@ public struct IntegrationInstaller {
         let piAsk = agent == .pi && piAgentAskDetected()
         let files = try managedFiles(agent)
         let existing = files.filter { FileManager.default.fileExists(atPath: $0.0.path) }
-        for (url, _) in existing { try checkOwnership(url) }
+        for (url, _) in files { try checkOwnership(url) }
         let hooks = try hookState(agent: agent)
-        if existing.isEmpty && !hooks.present && hooks.count == 0 {
+        if existing.isEmpty && (!hooks.present || agent == .copilot) && hooks.count == 0 {
             return IntegrationStatus(agent: agent, state: .notInstalled, detail: "Install the integration to receive events.", lastEvent: lastEvent)
         }
         if agent == .pi && existing.isEmpty {
@@ -249,7 +273,8 @@ public struct IntegrationInstaller {
             }
         }
         let detail = agent == .codex ? "Installed. Hook trust is not detectable: review /hooks in Codex." :
-            agent == .pi ? "Installed. \(piAsk ? (richEnabled ? "Rich questions enabled." : "pi-agent-ask detected; enable rich questions below.") : "pi-agent-ask not detected globally; install with: pi install npm:pi-agent-ask") Run /reload in existing pi sessions." : "Installed. Restart Claude Code to load hooks."
+            agent == .pi ? "Installed. \(piAsk ? (richEnabled ? "Rich questions enabled." : "pi-agent-ask detected; enable rich questions below.") : "pi-agent-ask not detected globally; install with: pi install npm:pi-agent-ask") Run /reload in existing pi sessions." :
+            agent == .copilot ? "Installed. Restart Copilot CLI to load hooks. Hooks can be disabled in Copilot settings." : "Installed. Restart Claude Code to load hooks."
         return IntegrationStatus(agent: agent, state: .installed, detail: detail, lastEvent: lastEvent, richQuestionsEnabled: richEnabled, piAskDetected: piAsk)
     }
     public func run(install: Bool, agents: [AgentKind], richQuestions: Bool? = nil) throws -> [String] {
@@ -270,7 +295,7 @@ public struct IntegrationInstaller {
                     if enableRich || !install { files.append(optional) }
                 }
                 for (url, _) in files { try checkOwnership(url) }
-                if agent != .pi { try patch(agent, install: install, dryRun: true) }
+                if agent != .pi && agent != .copilot { try patch(agent, install: install, dryRun: true) }
                 return (agent, files)
             }
             var messages = [String]()
@@ -281,9 +306,9 @@ public struct IntegrationInstaller {
                         if FileManager.default.fileExists(atPath: optional.path) { try FileManager.default.removeItem(at: optional) }
                     }
                     for (url, data) in files { try SafeFiles.write(data, to: url) }
-                    if agent != .pi { try patch(agent, install: true) }
+                    if agent != .pi && agent != .copilot { try patch(agent, install: true) }
                 } else {
-                    if agent != .pi { try patch(agent, install: false) }
+                    if agent != .pi && agent != .copilot { try patch(agent, install: false) }
                     for (url, _) in files where FileManager.default.fileExists(atPath: url.path) {
                         try FileManager.default.removeItem(at: url)
                     }
@@ -295,6 +320,7 @@ public struct IntegrationInstaller {
                 messages.append("\(install ? "Installed" : "Removed") \(agent.rawValue) skill\(agent == .pi ? " and extension" : " and hooks")")
             }
             if install && agents.contains(.codex) { messages.append("Codex: review and trust the new hooks using /hooks. No security settings were changed.") }
+            if install && agents.contains(.copilot) { messages.append("Copilot CLI: restart existing sessions to load hooks and skills.") }
             if install && agents.contains(.pi) {
                 if piAgentAskDetected() {
                     messages.append(enableRich ? "Pi: rich questions enabled for pi-agent-ask." : "Pi: pi-agent-ask detected. Enable rich questions in Integrations.")

@@ -154,6 +154,16 @@ class AppSmokeTests(unittest.TestCase):
         self.run_cli("clear")
         self.wait_for(lambda s: not s["items"])
 
+    def test_copilot_hook_lifecycle(self):
+        hook = {"session_id": "copilot-smoke", "hook_event_name": "Stop",
+                "timestamp": "2026-11-18T12:00:00.000Z", "cwd": "/tmp/demo"}
+        result = self.run_cli("hook", "copilot", "Stop", "--managed-splash-finish", input=json.dumps(hook))
+        self.assertEqual(result.stdout, "")
+        self.wait_for(lambda s: any(x["task"] == "copilot-smoke" and x["status"] == "done" for x in s["items"]))
+        hook.update(hook_event_name="UserPromptSubmit", timestamp="2026-11-18T12:00:01.000Z")
+        self.run_cli("hook", "copilot", "UserPromptSubmit", "--managed-splash-finish", input=json.dumps(hook))
+        self.wait_for(lambda s: all(x["task"] != "copilot-smoke" for x in s["items"]))
+
 
 if __name__ == "__main__":
     unittest.main()

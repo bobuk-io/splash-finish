@@ -12,6 +12,7 @@ public struct Inbox: Codable, Equatable, Sendable {
     public private(set) var seenEventIDs: [String] = []
     // Optional for compatibility with state files written by older versions.
     public private(set) var latestOrders: [String: EventOrder]?
+    public private(set) var latestHookTimes: [String: EventOrder]?
     public private(set) var lastEvents: [String: Date]?
     public init() {}
     public var attention: [AgentEvent] { items.filter { $0.status == .attention } }
@@ -21,6 +22,20 @@ public struct Inbox: Codable, Equatable, Sendable {
     @discardableResult public mutating func receive(_ raw: AgentEvent) throws -> Bool {
         let event = try raw.validated()
         guard !seenEventIDs.contains(event.id) else { return false }
+        // Copilot notifications lack a tool-call identity, so another parallel
+        // tool finishing cannot prove a pending approval was resolved.
+        if event.phase == "copilot-progress" { return false }
+        if let timestamp = event.hookTimestamp {
+            var times = latestHookTimes ?? [:]
+            if let current = times[event.key], timestamp < current.sequence { return false }
+            times[event.key] = EventOrder(run: 0, sequence: timestamp, received: Date())
+            if times.count > 512 {
+                for key in times.sorted(by: { $0.value.received < $1.value.received }).prefix(times.count - 512).map(\.key) {
+                    times.removeValue(forKey: key)
+                }
+            }
+            latestHookTimes = times
+        }
         // Once a producer upgrades a task to ordered events, do not let a delayed
         // legacy event erase the newer state. Ordering metadata is per task.
         if event.run == nil && latestOrders?[event.key] != nil { return false }
@@ -60,7 +75,8 @@ public struct Inbox: Codable, Equatable, Sendable {
         }
         if let previous = items.first(where: { $0.key == event.key }),
            previous.status == event.status, previous.title == event.title, previous.detail == event.detail,
-           previous.project == event.project, previous.source == event.source { return false }
+           previous.project == event.project, previous.source == event.source,
+           event.phase != "copilot-stop" { return false }
         if let index = items.firstIndex(where: { $0.key == event.key }) { items[index] = event }
         else { items.append(event) }
         items = Array(items.suffix(200))

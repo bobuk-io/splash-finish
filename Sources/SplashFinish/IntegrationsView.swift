@@ -31,6 +31,7 @@ import SplashFinishCore
         switch agent {
         case .claude: return "Claude Code"
         case .codex: return "Codex"
+        case .copilot: return "GitHub Copilot CLI"
         case .pi: return "pi"
         }
     }
@@ -94,7 +95,11 @@ import SplashFinishCore
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             header
-            ForEach(statuses) { statusRow($0) }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    ForEach(statuses) { statusRow($0) }
+                }
+            }
             if let message { Text(message).font(.caption).textSelection(.enabled).foregroundStyle(.secondary) }
             Spacer(minLength: 0)
             footer

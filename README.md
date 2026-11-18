@@ -1,6 +1,6 @@
 # Splash Finish
 
-A little landing strip for AI agents. **Splash Finish** is a native macOS menu bar app that collects finished work and requests for attention from Claude Code, Codex, and pi in one quiet window. Because one agent interrupting you is a notification; five agents doing it is a committee.
+A little landing strip for AI agents. **Splash Finish** is a native macOS menu bar app that collects finished work and requests for attention from Claude Code, Codex, GitHub Copilot CLI, and pi in one quiet window. Because one agent interrupting you is a notification; five agents doing it is a committee.
 
 ![Splash Finish inbox](screenshots/splash-finish.png)
 
@@ -40,6 +40,7 @@ splash-finish install-skills
 
 - **Claude Code:** start a new session to load the hooks and skill.
 - **Codex:** open `/hooks`, review and trust the new hooks, then restart if needed. Splash Finish does not bypass Codex's hook trust. Hooks must be enabled in your Codex configuration.
+- **GitHub Copilot CLI:** restart existing sessions to load the skill and hooks. This integration is for the local CLI, not GitHub's cloud coding agent.
 - **pi:** use `/reload` in running sessions, or start a new one. Requires pi **1.5.0+** for the `agent_settled` and `ui_prompt_start` events.
 
 Installation of integrations is explicit. The app will not edit agent settings just because you opened it.
@@ -128,8 +129,8 @@ Deep links are not authenticated: any local app can send them. They display boun
 ## 🧰 Agent integrations
 
 ```sh
-splash-finish install-skills                 # all three
-splash-finish install-skills --agent pi      # claude | codex | pi
+splash-finish install-skills                 # all agents
+splash-finish install-skills --agent pi      # claude | codex | copilot | pi
 splash-finish uninstall-skills               # remove all Splash Finish integrations
 splash-finish uninstall-skills --agent codex
 ```
@@ -138,9 +139,12 @@ splash-finish uninstall-skills --agent codex
 |---|---|---|
 | Claude Code | user skill and `~/.claude/settings.json` hooks | `Stop`, `StopFailure`, permission and supported input notifications |
 | Codex | user skill and `~/.codex/hooks.json` hooks | `Stop` and `PermissionRequest`; `/hooks` trust required |
+| GitHub Copilot CLI | user skill and `~/.copilot/hooks/splash-finish.json` | turn end, new prompt, session end, and supported permission/input notifications |
 | pi | user skill and `~/.pi/agent/extensions/splash-finish.ts` | settled, extension UI prompts, common question tools, errors and interruption |
 
 Pi notifications are fire-and-forget and never delay the agent. User-opened menus while Pi is idle (such as `/jewter`) do not trigger attention notifications or clear completed items; blocking dialogs during an active agent run still report requests for input. Subagent sessions (pi-subagents background children and in-process `run-N` sessions) are filtered: only requests for input are forwarded, so a fan-out of workers does not flood the inbox.
+
+Copilot reports “Agent turn ended” without reading the answer or transcript. A turn can end while background work is still running; a later turn produces another notification. Only `permission_prompt` and `elicitation_dialog` notifications request attention; background notifications and subagent events are ignored. Tool completions cannot identify which question was resolved, so attention remains until a new prompt, turn end, or session end.
 
 Set `SPLASH_FINISH_DISABLED=1` in managed worker processes (for example pi-selecta workers) to suppress their lifecycle hooks, rich questions and explicit `notify` calls. Leave it unset in the coordinator so only the coordinator asks the human and reports completion. Available in 0.3.8 and later. Pi integrations, installed hook shell guards, and the CLI honor this opt-out. After updating, reinstall integrations with `splash-finish install-skills` and run `/reload` in existing Pi sessions.
 
@@ -150,7 +154,7 @@ Completions mean **the agent stopped responding**, not that its claims or tests 
 
 Open **Integrations…** in the menu bar or run `splash-finish doctor` to inspect installed files, hooks, update availability, and the last recorded event. Codex hook trust is not exposed to the inspector; use `/hooks` to check it. Event timestamps are recorded only by app versions supporting this feature.
 
-The installer preserves unrelated hooks/settings, rejects unmanaged files and symlinked configuration paths, and writes a uniquely named backup before changing an existing JSON config, keeping the three newest backups. Reinstall updates only Splash Finish entries, and the app offers a repair when its version or location changed because hooks embed the absolute path of the binary. Config locations honor `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, and `PI_CODING_AGENT_DIR`. Removal does not delete the app, unrelated hooks, or configuration backups. Existing pi sessions need `/reload` after either operation.
+The installer preserves unrelated hooks/settings, rejects unmanaged files and symlinked configuration paths, and writes a uniquely named backup before changing an existing shared JSON config, keeping the three newest backups. Reinstall updates only Splash Finish entries, and the app offers a repair when its version or location changed because hooks embed the absolute path of the binary. Config locations honor `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, and `PI_CODING_AGENT_DIR`; Copilot skills and hooks both use `COPILOT_HOME` when set. Removal does not delete the app, unrelated hooks, or configuration backups. Restart Copilot CLI or run `/reload` in existing pi sessions after changes.
 
 ### Rich pi questions
 

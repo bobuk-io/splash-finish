@@ -31,14 +31,16 @@ public struct AgentEvent: Codable, Equatable, Identifiable, Sendable {
     public var run: Int64?
     public var sequence: Int64?
     public var phase: String?
+    public var hookTimestamp: Int64?
     public var key: String { agent.lowercased() + ":" + task }
 
     public init(id: String = UUID().uuidString, task: String, agent: String, status: EventStatus,
                 title: String, detail: String = "", project: String = "", source: EventSource? = nil,
-                date: Date = Date(), run: Int64? = nil, sequence: Int64? = nil, phase: String? = nil) {
+                date: Date = Date(), run: Int64? = nil, sequence: Int64? = nil, phase: String? = nil,
+                hookTimestamp: Int64? = nil) {
         self.id = id; self.task = task; self.agent = agent; self.status = status
         self.title = title; self.detail = detail; self.project = project; self.source = source; self.date = date
-        self.run = run; self.sequence = sequence; self.phase = phase
+        self.run = run; self.sequence = sequence; self.phase = phase; self.hookTimestamp = hookTimestamp
     }
 
     public func validated() throws -> Self {
@@ -47,7 +49,10 @@ public struct AgentEvent: Codable, Equatable, Identifiable, Sendable {
         guard (run == nil && sequence == nil) || (run != nil && sequence != nil && run! >= 0 && sequence! >= 0) else {
             throw EventError.invalid("Event run and sequence must both be non-negative integers")
         }
-        guard phase == nil || phase == "progress" else { throw EventError.invalid("Invalid event phase") }
+        guard phase == nil || phase == "progress" || phase == "copilot-progress" || phase == "copilot-stop" else {
+            throw EventError.invalid("Invalid event phase")
+        }
+        guard hookTimestamp == nil || hookTimestamp! >= 0 else { throw EventError.invalid("Invalid hook timestamp") }
         var event = self
         event.agent = Self.clean(agent, limit: 40)
         event.title = MessageText.clean(title)
@@ -87,6 +92,7 @@ public enum DeepLink {
         var fields = ["id": event.id, "task": event.task, "agent": event.agent, "status": event.status.rawValue,
                       "title": event.title, "detail": event.detail, "project": event.project]
         if let phase = event.phase { fields["phase"] = phase }
+        if let timestamp = event.hookTimestamp { fields["hook-timestamp"] = String(timestamp) }
         if let run = event.run, let sequence = event.sequence {
             fields["run"] = String(run); fields["sequence"] = String(sequence)
         }
@@ -130,8 +136,10 @@ public enum DeepLink {
         guard (fields["run"] == nil && fields["sequence"] == nil) || (run != nil && sequence != nil) else {
             throw EventError.invalid("Invalid event ordering fields")
         }
+        let hookTimestamp = fields["hook-timestamp"].flatMap(Int64.init)
+        guard fields["hook-timestamp"] == nil || hookTimestamp != nil else { throw EventError.invalid("Invalid hook timestamp") }
         return try AgentEvent(id: fields["id"] ?? UUID().uuidString, task: task, agent: agent, status: status,
                               title: fields["title"] ?? "", detail: fields["detail"] ?? "", project: fields["project"] ?? "", source: source,
-                              run: run, sequence: sequence, phase: fields["phase"]).validated()
+                              run: run, sequence: sequence, phase: fields["phase"], hookTimestamp: hookTimestamp).validated()
     }
 }
