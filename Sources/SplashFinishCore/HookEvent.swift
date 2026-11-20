@@ -21,6 +21,7 @@ public enum HookEvent {
         var status: EventStatus
         var title: String
         var detail = ""
+        var phase: String?
         switch name {
         case "Stop":
             // A Stop hook means a response ended, not that its claims were verified.
@@ -39,12 +40,23 @@ public enum HookEvent {
             status = .attention
             title = json["title"] as? String ?? "Needs your attention"
             detail = json["message"] as? String ?? "Waiting for your input"
+        case "PostToolUse" where agent == "codex" && tool == "request_user_input_async":
+            let response = (json["tool_response"] as? [String: Any]) ?? (json["tool_response"] as? String).flatMap {
+                (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any]
+            }
+            guard response?["accepted"] as? Bool == true else { return nil }
+            let input = json["tool_input"] as? [String: Any]
+            let questions = input?["questions"] as? [[String: Any]]
+            let question = questions?.first?["title"] as? String
+            status = .attention; title = question ?? "Codex has a question"
+            detail = "Waiting for your input"; phase = "question"
         case "UserPromptSubmit", "PostToolUse", "Interrupt", "SessionEnd":
             status = .running; title = "Working"
+            if name == "PostToolUse" { phase = "progress" }
         default: return nil
         }
         return try AgentEvent(task: session, agent: display, status: status, title: title,
                               detail: detail, project: project, source: source,
-                              phase: name == "PostToolUse" ? "progress" : nil).validated()
+                              phase: phase).validated()
     }
 }

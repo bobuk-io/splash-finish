@@ -47,7 +47,7 @@ public struct AgentEvent: Codable, Equatable, Identifiable, Sendable {
         guard (run == nil && sequence == nil) || (run != nil && sequence != nil && run! >= 0 && sequence! >= 0) else {
             throw EventError.invalid("Event run and sequence must both be non-negative integers")
         }
-        guard phase == nil || phase == "progress" else { throw EventError.invalid("Invalid event phase") }
+        guard phase == nil || phase == "progress" || phase == "question" else { throw EventError.invalid("Invalid event phase") }
         var event = self
         event.agent = Self.clean(agent, limit: 40)
         event.title = MessageText.clean(title)

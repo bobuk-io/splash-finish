@@ -51,8 +51,8 @@ public struct Inbox: Codable, Equatable, Sendable {
         seenEventIDs = Array(seenEventIDs.suffix(512))
         if event.status == .running {
             // Concurrent tool-completion hooks can arrive after the final Stop.
-            // A progress event can clear attention, but not a completed result.
-            if event.phase == "progress", items.contains(where: { $0.key == event.key && $0.status == .done }) {
+            // Async questions remain open while the agent continues using tools.
+            if event.phase == "progress", items.contains(where: { $0.key == event.key && ($0.status == .done || $0.phase == "question") }) {
                 return false
             }
             items.removeAll { $0.key == event.key }
