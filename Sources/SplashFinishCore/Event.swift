@@ -11,9 +11,11 @@ public struct EventSource: Codable, Equatable, Sendable {
     public var weztermPane: UInt64?
     public var orca: OrcaSource?
     public var rex: RexSource?
+    public var agterm: AgtermSource?
     public init(pid: Int32? = nil, bundleID: String? = nil, url: String? = nil, weztermPane: UInt64? = nil,
-                orca: OrcaSource? = nil, rex: RexSource? = nil) {
+                orca: OrcaSource? = nil, rex: RexSource? = nil, agterm: AgtermSource? = nil) {
         self.pid = pid; self.bundleID = bundleID; self.url = url; self.weztermPane = weztermPane; self.orca = orca; self.rex = rex
+        self.agterm = agterm
     }
 }
 
@@ -57,6 +59,7 @@ public struct AgentEvent: Codable, Equatable, Identifiable, Sendable {
         if let link = source?.url, !Self.isSafeSourceURL(link) { throw EventError.invalid("Unsupported source URL scheme") }
         if let orca = source?.orca { _ = try orca.validated() }
         if let rex = source?.rex { _ = try rex.validated() }
+        if let agterm = source?.agterm { _ = try agterm.validated() }
         return event
     }
 
@@ -101,6 +104,10 @@ public enum DeepLink {
             fields["orca-worktree"] = source.orca?.worktree
             fields["orca-pane"] = source.orca?.pane
             fields["orca-session"] = source.orca?.session
+            fields["agterm-session"] = source.agterm?.session
+            fields["agterm-window"] = source.agterm?.window
+            fields["agterm-pane"] = source.agterm?.pane
+            fields["agterm-socket"] = source.agterm?.socket
         }
         c.queryItems = fields.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
         guard let url = c.url else { throw EventError.invalid("Could not encode event") }
@@ -124,8 +131,11 @@ public enum DeepLink {
                                         pane: fields["orca-pane"], session: fields["orca-session"]) : nil
         let hasRex = fields["rex-session"] != nil || fields["rex-block"] != nil
         let rex = hasRex ? RexSource(session: fields["rex-session"] ?? "", block: fields["rex-block"] ?? "") : nil
+        let hasAgterm = ["agterm-session", "agterm-window", "agterm-pane", "agterm-socket"].contains { fields[$0] != nil }
+        let agterm = hasAgterm ? AgtermSource(session: fields["agterm-session"] ?? "", window: fields["agterm-window"] ?? "",
+                                             pane: fields["agterm-pane"], socket: fields["agterm-socket"] ?? "") : nil
         let source = EventSource(pid: fields["source-pid"].flatMap(Int32.init), bundleID: fields["source-bundle"],
-                                 url: fields["source-url"], weztermPane: pane, orca: orca, rex: rex)
+                                 url: fields["source-url"], weztermPane: pane, orca: orca, rex: rex, agterm: agterm)
         let run = fields["run"].flatMap(Int64.init), sequence = fields["sequence"].flatMap(Int64.init)
         guard (fields["run"] == nil && fields["sequence"] == nil) || (run != nil && sequence != nil) else {
             throw EventError.invalid("Invalid event ordering fields")

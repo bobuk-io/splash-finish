@@ -11,7 +11,8 @@ const executable: string = __EXECUTABLE_JSON__;
 const maxBytes = 131072;
 type Question = { id: string; label: string; prompt: string; context?: string; type: 'single' | 'multi'; options: { value: string; label: string; description?: string; recommended?: boolean }[] };
 type OrcaSource = { terminal?: string; worktree?: string; pane?: string };
-type Form = { title?: string; questions: Question[]; project: string; session: string; orca?: OrcaSource; rex?: { session: string; block: string } };
+type AgtermSource = { session: string; window: string; pane?: string; socket: string };
+type Form = { title?: string; questions: Question[]; project: string; session: string; orca?: OrcaSource; rex?: { session: string; block: string }; agterm?: AgtermSource };
 type Transport = { close(): void; result(ok: boolean, message?: string): void };
 
 function normalize(event: any, ctx: ExtensionContext): Form | undefined {
@@ -44,6 +45,17 @@ function normalize(event: any, ctx: ExtensionContext): Form | undefined {
         (!process.env.REX_SERVER || process.env.REX_SERVER.startsWith('unix:///')) &&
         session && session.length === 44 && new RegExp(`^session:${uuid}$`).test(session) &&
         block && block.length === 42 && new RegExp(`^block:${uuid}$`).test(block)) form.rex = { session, block };
+    const agtermSession = process.env.AGTERM_SESSION_ID, window = process.env.AGTERM_WINDOW_ID;
+    const agtermPane = process.env.AGTERM_PANE_ID, socket = process.env.AGTERM_SOCKET;
+    const isUUID = (value: string | undefined) => value !== undefined && value.length === 36 && new RegExp(`^${uuid}$`).test(value);
+    if (process.env.AGTERM_ENABLED === '1' &&
+        process.env.SSH_CONNECTION === undefined && process.env.SSH_TTY === undefined && process.env.SSH_CLIENT === undefined &&
+        isUUID(agtermSession) && isUUID(window) && (agtermPane === undefined || isUUID(agtermPane)) &&
+        socket?.startsWith('/') && Buffer.byteLength(socket) <= 103 &&
+        !/[\p{Cc}\p{Cf}]/u.test(socket) && !socket.split('/').some(part => part === '.' || part === '..')) {
+        form.agterm = { session: agtermSession!, window: window!, socket };
+        if (agtermPane !== undefined) form.agterm.pane = agtermPane;
+    }
     if (Buffer.byteLength(JSON.stringify(form)) > maxBytes) return;
     return form;
 }

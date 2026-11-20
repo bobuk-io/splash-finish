@@ -80,7 +80,8 @@ import SplashFinishCore
             self.receive(AgentEvent(task: "question-" + id, agent: "pi", status: .attention,
                                     title: "Question awaiting your answer", detail: "pi-agent-ask", project: question.project,
                                     source: question.rex.map { EventSource(bundleID: RexSource.bundleID, rex: $0) }
-                                        ?? question.orca.map { EventSource(bundleID: OrcaSource.bundleID, orca: $0) }))
+                                        ?? question.orca.map { EventSource(bundleID: OrcaSource.bundleID, orca: $0) }
+                                        ?? question.agterm.map { EventSource(bundleID: AgtermSource.bundleID, agterm: $0) }))
         }
         connection.onResult = { [weak self] ok, error in
             guard let self else { return }
@@ -112,9 +113,8 @@ import SplashFinishCore
     }
     func usePi(id: String) {
         let event = inbox.items.first { questionID(for: $0) == id }
-        if let event, event.source?.rex != nil {
-            message = nil
-            SourceNavigator.open(event, model: self) { [weak self] reachedExactSource in
+        if let event, event.source?.rex != nil || (event.source?.orca == nil && event.source?.agterm != nil) {
+            openSource(event) { [weak self] reachedExactSource in
                 if reachedExactSource { self?.questionConnections[id]?.end() }
             }
             return
@@ -122,9 +122,10 @@ import SplashFinishCore
         questionConnections[id]?.end()
         if let event, event.source?.orca != nil { openSource(event) }
     }
-    func openSource(_ event: AgentEvent) {
+    func openSource(_ event: AgentEvent, completion: ((Bool) -> Void)? = nil) {
         message = nil
         SourceNavigator.open(event, model: self) { [weak self] reachedExactSource in
+            if let completion { completion(reachedExactSource); return }
             guard let self, self.inbox.completeSourceNavigation(event, reachedExactSource: reachedExactSource) else { return }
             self.selection.reconcile(keys: self.orderedKeys)
             self.persist(); self.scheduleWake(); self.onChange?(false)

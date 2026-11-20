@@ -4,8 +4,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createConnection } from 'node:net';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 
 const dir = await mkdtemp(join(tmpdir(), 'splash-pi-question-test-'));
+const sourceKeys = ['AGTERM_ENABLED', 'AGTERM_SESSION_ID', 'AGTERM_WINDOW_ID', 'AGTERM_PANE_ID', 'AGTERM_SOCKET',
+  'REX_SESSION', 'REX_BLOCK', 'REX_SERVER', 'ORCA_TERMINAL_HANDLE', 'ORCA_WORKTREE_ID', 'ORCA_WORKSPACE_ID',
+  'ORCA_PANE_KEY', 'SSH_CONNECTION', 'SSH_TTY', 'SSH_CLIENT', 'SPLASH_FINISH_DISABLED'];
+const inherited = sourceKeys.map(key => process.env[key]);
+sourceKeys.forEach(key => delete process.env[key]);
+const originalExecFile = childProcess.execFile;
+childProcess.execFile = () => assert.fail('question capture and injected presentation must not launch GUI or CLI processes');
+syncBuiltinESMExports();
 try {
   const source = await readFile('Sources/SplashFinish/Resources/Integrations/pi-questions.ts', 'utf8');
   const file = join(dir, 'questions.ts');
@@ -40,6 +50,44 @@ try {
   } finally {
     rexKeys.forEach((key, index) => { if (rexPrevious[index] == null) delete process.env[key]; else process.env[key] = rexPrevious[index]; });
   }
+  const agterm = {session:'01a1d6be-ed97-7d65-b0bf-dbccd7256f1a', window:'01a1d9ff-f9a9-7831-b1e9-1187fcbf6756',
+    pane:'01a1d9ff-f9a9-7831-b1e9-1187fcbf6757', socket:'/tmp/agterm.sock'};
+  const agtermKeys = ['AGTERM_ENABLED', 'AGTERM_SESSION_ID', 'AGTERM_WINDOW_ID', 'AGTERM_PANE_ID', 'AGTERM_SOCKET',
+    'SSH_CONNECTION', 'SSH_TTY', 'SSH_CLIENT'];
+  let capturedAgterm;
+  const agtermCases = [
+    [{}, agterm], [{AGTERM_PANE_ID:undefined}, {session:agterm.session, window:agterm.window, socket:agterm.socket}],
+    [{AGTERM_ENABLED:'0'}, undefined], [{AGTERM_SESSION_ID:undefined}, undefined],
+    [{AGTERM_WINDOW_ID:undefined}, undefined], [{AGTERM_SOCKET:undefined}, undefined],
+    [{AGTERM_SESSION_ID:agterm.session + '\n'}, undefined], [{AGTERM_WINDOW_ID:'short'}, undefined],
+    [{AGTERM_PANE_ID:'terminal'}, undefined], [{AGTERM_PANE_ID:''}, undefined],
+    [{AGTERM_SOCKET:'relative.sock'}, undefined], [{AGTERM_SOCKET:'/tmp/../agterm.sock'}, undefined],
+    [{AGTERM_SOCKET:'/tmp/./agterm.sock'}, undefined], [{AGTERM_SOCKET:'/tmp/a\u0085.sock'}, undefined],
+    [{AGTERM_SOCKET:'/tmp/a\u200b.sock'}, undefined],
+    [{AGTERM_SOCKET:'/' + 'é'.repeat(52)}, undefined],
+    ...['SSH_CONNECTION', 'SSH_TTY', 'SSH_CLIENT'].flatMap(key => [[{[key]:'remote'}, undefined], [{[key]:''}, undefined]])
+  ];
+  try {
+    for (const [override, expected] of agtermCases) {
+      agtermKeys.forEach(key => delete process.env[key]);
+      Object.assign(process.env, {AGTERM_ENABLED:'1', AGTERM_SESSION_ID:agterm.session, AGTERM_WINDOW_ID:agterm.window,
+        AGTERM_PANE_ID:agterm.pane, AGTERM_SOCKET:agterm.socket});
+      for (const [key, value] of Object.entries(override)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+      const hooks = {}, subscribers = {}; let captured;
+      registerQuestions({on(name, fn) {hooks[name] = fn;}, events:{on(name, fn) {subscribers[name] = fn;}}}, form => {
+        captured = form; return {close() {}, result() {}};
+      });
+      hooks.session_start({}, {cwd:'/code/demo', sessionManager:{getSessionId:() => 'session'}});
+      subscribers['pi-agent-ask:started']({version:1, flowId:'agterm-capture', questions:[
+        {id:'q', label:'Q', prompt:'Choose', type:'single', options:[{value:'a', label:'A'}]}
+      ]});
+      assert.deepEqual(captured.agterm, expected, JSON.stringify(override));
+      if (expected === agterm) capturedAgterm = captured.agterm;
+      hooks.session_shutdown();
+    }
+  } finally { agtermKeys.forEach(key => delete process.env[key]); }
   const handlers = {}, listeners = {}, forms = [];
   const events = { on(name, fn) { (listeners[name] ??= []).push(fn); }, emit(name, data) { for (const fn of listeners[name] ?? []) fn(data); } };
   registerQuestions({ on(name, fn) { handlers[name] = fn; }, events }, (form, submit) => {
@@ -108,7 +156,7 @@ try {
   assert.equal(retryForms[0].closed, 1);
   retryHandlers.session_shutdown();
 
-  const form = {questions, project:'test', session:'s'};
+  const form = {questions, project:'test', session:'s', agterm:capturedAgterm};
   async function sendSocket(value) {
     let observed, socket;
     const closed = new Promise(resolve => {
@@ -119,7 +167,10 @@ try {
         socket.on('data', chunk => {
           lines += chunk.toString();
           if (lines.includes('\n') && !socket.sent) {
-            socket.sent = true; assert.equal(JSON.parse(lines.split('\n')[0]).questions[0].id, 'one');
+            socket.sent = true;
+            const wireForm = JSON.parse(lines.split('\n')[0]);
+            assert.equal(wireForm.questions[0].id, 'one');
+            assert.deepEqual(wireForm.agterm, agterm, 'normalized coordinates survive socket transport');
             socket.write(JSON.stringify(value) + '\n');
             // Invalid answers receive a negative acknowledgement and the terminal remains available.
             if (value.invalidTest) setTimeout(() => transport.close(), 40);
@@ -151,4 +202,8 @@ try {
   });
   assert.equal(invalidAck, true); assert.equal(acceptedAfterRetry, true);
   console.log('PASS: pi-agent-ask lifecycle, concurrent forms, ack race, socket validation and fallback');
-} finally { await rm(dir, {recursive:true,force:true}); }
+} finally {
+  childProcess.execFile = originalExecFile; syncBuiltinESMExports();
+  sourceKeys.forEach((key, index) => { if (inherited[index] === undefined) delete process.env[key]; else process.env[key] = inherited[index]; });
+  await rm(dir, {recursive:true,force:true});
+}

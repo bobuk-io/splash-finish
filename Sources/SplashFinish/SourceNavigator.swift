@@ -13,6 +13,9 @@ import SplashFinishCore
         if let orca = OrcaSource.capture(environment: env) {
             return EventSource(bundleID: OrcaSource.bundleID, orca: orca)
         }
+        if let agterm = AgtermSource.capture(environment: env) {
+            return EventSource(bundleID: AgtermSource.bundleID, agterm: agterm)
+        }
         var pid = getppid()
         for _ in 0..<48 {
             guard pid > 1 else { break }
@@ -52,6 +55,13 @@ import SplashFinishCore
                     NSRunningApplication.runningApplications(withBundleIdentifier: OrcaSource.bundleID).first?.activate(options: [])
                     model.message = "The original Orca chat or terminal is unavailable. No other project was selected."
                 }
+                completion(opened)
+            }
+            return
+        }
+        if let agterm = event.source?.agterm {
+            AgtermNavigator.open(agterm) { opened, message in
+                if !opened { model.message = message }
                 completion(opened)
             }
             return

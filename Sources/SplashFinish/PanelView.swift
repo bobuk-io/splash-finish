@@ -38,6 +38,7 @@ private struct NotificationRow: View {
         if event.source?.rex != nil { return "Open original Rex terminal pane" }
         if event.source?.orca?.targets.first == .chat { return "Open original Orca chat" }
         if event.source?.orca != nil { return "Open original Orca project and terminal" }
+        if event.source?.agterm != nil { return "Open original Agterm session and pane" }
         if event.source?.weztermPane != nil { return "Open WezTerm pane if available" }
         if event.source?.bundleID == "com.github.wez.wezterm" { return "Activate WezTerm" }
         if event.source?.bundleID != nil { return "Activate source app" }

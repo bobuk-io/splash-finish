@@ -119,6 +119,28 @@ class AppSmokeTests(unittest.TestCase):
                 "terminal": "term_original", "worktree": env["ORCA_WORKTREE_ID"], "pane": "tab-1:leaf-1"})
             self.assertEqual(event["source"]["bundleID"], "com.stablyai.orca")
 
+    def test_agterm_coordinates_survive_notify_and_agent_hooks(self):
+        env = {key: value for key, value in self.env.items()
+               if not key.startswith(("REX_", "ORCA_", "AGTERM_"))
+               and key not in ("SSH_CONNECTION", "SSH_TTY", "SSH_CLIENT")}
+        coordinates = {"session": str(uuid.uuid4()), "window": str(uuid.uuid4()),
+                       "pane": str(uuid.uuid4()), "socket": "/tmp/agterm-smoke.sock"}
+        env.update({"AGTERM_ENABLED": "1", "AGTERM_SESSION_ID": coordinates["session"],
+                    "AGTERM_WINDOW_ID": coordinates["window"], "AGTERM_PANE_ID": coordinates["pane"],
+                    "AGTERM_SOCKET": coordinates["socket"]})
+        subprocess.run([str(APP), "notify", "--agent", "OMP", "--task", "agterm-notify",
+                        "--title", "Agterm return smoke"], env=env,
+                       capture_output=True, text=True, check=True, timeout=10)
+        for agent in ("claude", "codex"):
+            hook = {"session_id": f"agterm-{agent}", "hook_event_name": "Stop", "cwd": "/tmp/project"}
+            subprocess.run([str(APP), "hook", agent, "--managed-splash-finish"],
+                           input=json.dumps(hook), env=env,
+                           capture_output=True, text=True, check=True, timeout=10)
+        state = self.wait_for(lambda s: len(s["items"]) == 3)
+        for event in state["items"]:
+            self.assertEqual(event["source"]["agterm"], coordinates)
+            self.assertEqual(event["source"]["bundleID"], "com.umputun.agterm")
+
     def test_markdown_payload_survives_cli_without_early_truncation(self):
         target = 'https://example.com/report/' + 'a' * 250
         title = f'Готово: [**релиз**]({target}) опубликован.'
