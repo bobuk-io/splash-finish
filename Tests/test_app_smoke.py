@@ -165,6 +165,34 @@ class AppSmokeTests(unittest.TestCase):
         self.run_cli("hook", "copilot", "UserPromptSubmit", "--managed-splash-finish", input=json.dumps(hook))
         self.wait_for(lambda s: all(x["task"] != "copilot-smoke" for x in s["items"]))
 
+    def test_agy_hook_lifecycle(self):
+        transcript = Path(self.temp.name) / "agy-transcript.jsonl"
+        transcript.write_text(json.dumps({
+            "step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "content": "Antigravity finished"
+        }) + "\n")
+        question_hook = {
+            "conversationId": "agy-smoke", "hookEventName": "PreToolUse", "cwd": "/tmp/demo",
+            "toolCall": {"name": "ask_question", "args": {"questions": [{"question": "Ship it?"}]}}
+        }
+        result = self.run_cli("hook", "agy", "PreToolUse", "--managed-splash-finish", input=json.dumps(question_hook))
+        self.assertEqual(json.loads(result.stdout), {"decision": "allow"})
+        self.wait_for(lambda s: any(x["task"] == "agy-smoke" and x["status"] == "attention" and x["title"] == "Ship it?" for x in s["items"]))
+        post_hook = {"conversationId": "agy-smoke", "hookEventName": "PostToolUse", "toolCall": {"name": "ask_question"}}
+        result = self.run_cli("hook", "agy", "PostToolUse", "--managed-splash-finish", input=json.dumps(post_hook))
+        self.assertEqual(json.loads(result.stdout), {})
+        self.wait_for(lambda s: all(x["task"] != "agy-smoke" for x in s["items"]))
+        stop_hook = {
+            "conversationId": "agy-smoke", "hookEventName": "Stop", "cwd": "/tmp/demo",
+            "terminationReason": "NO_TOOL_CALL", "fullyIdle": True, "transcriptPath": str(transcript)
+        }
+        result = self.run_cli("hook", "agy", "Stop", "--managed-splash-finish", input=json.dumps(stop_hook))
+        self.assertEqual(json.loads(result.stdout), {})
+        self.wait_for(lambda s: any(x["task"] == "agy-smoke" and x["status"] == "done" and x["title"] == "Antigravity finished" for x in s["items"]))
+        pre_hook = {"conversationId": "agy-smoke", "hookEventName": "PreInvocation", "invocationNum": 1}
+        result = self.run_cli("hook", "agy", "PreInvocation", "--managed-splash-finish", input=json.dumps(pre_hook))
+        self.assertEqual(json.loads(result.stdout), {})
+        self.wait_for(lambda s: all(x["task"] != "agy-smoke" for x in s["items"]))
+
 
 if __name__ == "__main__":
     unittest.main()

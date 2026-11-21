@@ -32,6 +32,7 @@ import SplashFinishCore
         case .claude: return "Claude Code"
         case .codex: return "Codex"
         case .copilot: return "GitHub Copilot CLI"
+        case .agy: return "Antigravity (agy)"
         case .pi: return "pi"
         }
     }

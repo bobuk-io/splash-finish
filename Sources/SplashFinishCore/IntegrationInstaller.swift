@@ -2,7 +2,7 @@ import BobukCore
 import Foundation
 
 public enum AgentKind: String, CaseIterable, Sendable {
-    case claude, codex, copilot, pi
+    case claude, codex, copilot, agy, pi
 }
 
 public enum IntegrationState: String, Sendable {
@@ -42,6 +42,7 @@ public struct IntegrationInstaller {
         case .claude: key = "CLAUDE_CONFIG_DIR"; fallback = ".claude"
         case .codex: key = "CODEX_HOME"; fallback = ".codex"
         case .copilot: key = "COPILOT_HOME"; fallback = ".copilot"
+        case .agy: key = "ANTIGRAVITY_CONFIG_DIR"; fallback = ".gemini/config"
         case .pi: key = "PI_CODING_AGENT_DIR"; fallback = ".pi/agent"
         }
         return environment[key].map { URL(fileURLWithPath: $0, isDirectory: true) } ?? home.appendingPathComponent(fallback)
@@ -150,10 +151,50 @@ public struct IntegrationInstaller {
         }
         for stale in backups.dropFirst(limit) { try? FileManager.default.removeItem(at: stale) }
     }
+    private func agyHookCommand(_ event: String, fallbackOutput: String = "{}") -> String {
+        "if [ \"${SPLASH_FINISH_DISABLED:-}\" != 1 ]; then \(quote(executable)) hook agy \(event) \(marker); else printf '%s\\n' '\(fallbackOutput)'; fi"
+    }
+    private func agyPluginRoot() -> URL {
+        root(.agy).appendingPathComponent("plugins/splash-finish", isDirectory: true)
+    }
     private func managedFiles(_ agent: AgentKind) throws -> [(URL, Data)] {
         let skill = try String(contentsOf: resources.appendingPathComponent("SKILL.md"), encoding: .utf8)
         let command = quote(executable)
         let renderedSkill = skill.replacingOccurrences(of: "__COMMAND__", with: command)
+        if agent == .agy {
+            let pluginRoot = agyPluginRoot()
+            let manifest: [String: Any] = [
+                "name": "splash-finish",
+                "version": "1.0.0",
+                "description": "\(fileMarker). Native macOS inbox notifications for Antigravity.",
+                "homepage": "https://bobuk.io/apps/splash-finish",
+                "repository": "https://github.com/bobuk-io/splash-finish"
+            ]
+            let manifestData = try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) + Data([10])
+            let flatHandler: (String) -> [[String: Any]] = { event in
+                [["type": "command", "command": self.agyHookCommand(event), "timeout": 3]]
+            }
+            let toolGroup: (String, String) -> [[String: Any]] = { event, fallback in
+                [[
+                    "matcher": "ask_question",
+                    "hooks": [["type": "command", "command": self.agyHookCommand(event, fallbackOutput: fallback), "timeout": 3]]
+                ]]
+            }
+            let hooksConfig: [String: Any] = [
+                "splash-finish": [
+                    "PreInvocation": flatHandler("PreInvocation"),
+                    "PreToolUse": toolGroup("PreToolUse", "{\"decision\":\"allow\"}"),
+                    "PostToolUse": toolGroup("PostToolUse", "{}"),
+                    "Stop": flatHandler("Stop")
+                ]
+            ]
+            let hooksData = try JSONSerialization.data(withJSONObject: hooksConfig, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]) + Data([10])
+            return [
+                (pluginRoot.appendingPathComponent("plugin.json"), manifestData),
+                (pluginRoot.appendingPathComponent("hooks.json"), hooksData),
+                (pluginRoot.appendingPathComponent("skills/splash-finish/SKILL.md"), Data(renderedSkill.utf8))
+            ]
+        }
         var files = [(root(agent).appendingPathComponent("skills/splash-finish/SKILL.md"), Data(renderedSkill.utf8))]
         if agent == .copilot {
             var hooks: [String: [[String: Any]]] = [:]
@@ -194,6 +235,25 @@ public struct IntegrationInstaller {
                 }
                 return
             }
+            if url.lastPathComponent == "plugin.json" {
+                guard let object = try? JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any],
+                      let description = object["description"] as? String,
+                      description.contains(fileMarker) else {
+                    throw EventError.invalid("Refusing to overwrite an unmanaged or malformed file: \(url.path)")
+                }
+                return
+            }
+            if url.lastPathComponent == "hooks.json" {
+                guard let data = try? Data(contentsOf: url),
+                      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      object.keys.count == 1,
+                      object["splash-finish"] is [String: Any],
+                      let text = String(data: data, encoding: .utf8),
+                      text.contains(marker) else {
+                    throw EventError.invalid("Refusing to overwrite an unmanaged or malformed file: \(url.path)")
+                }
+                return
+            }
             guard let text = try? String(contentsOf: url, encoding: .utf8), text.contains(fileMarker) else {
                 throw EventError.invalid("Refusing to overwrite an unmanaged file: \(url.path)")
             }
@@ -208,6 +268,7 @@ public struct IntegrationInstaller {
         case .claude: aliases = ["claudecode", "claude code", "claude"]
         case .codex: aliases = ["codex", "codexcli"]
         case .copilot: aliases = ["githubcopilotcli", "copilotcli", "copilot"]
+        case .agy: aliases = ["antigravity", "agy", "antigravitycli"]
         case .pi: aliases = ["pi"]
         }
         for alias in aliases where timestamps[alias] != nil { return timestamps[alias] }
@@ -215,7 +276,7 @@ public struct IntegrationInstaller {
     }
     /// Inspect the managed hook entries without touching any files.
     private func hookState(agent: AgentKind) throws -> (present: Bool, current: Bool, count: Int) {
-        guard agent != .pi && agent != .copilot else { return (true, true, 0) }
+        guard agent != .pi && agent != .copilot && agent != .agy else { return (true, true, 0) }
         let config = try readObject(configuration(agent))
         if let raw = config["hooks"], !(raw is [String: Any]) { throw EventError.invalid("Invalid hooks object") }
         let hooks = config["hooks"] as? [String: Any] ?? [:]
@@ -252,7 +313,7 @@ public struct IntegrationInstaller {
         let existing = files.filter { FileManager.default.fileExists(atPath: $0.0.path) }
         for (url, _) in files { try checkOwnership(url) }
         let hooks = try hookState(agent: agent)
-        if existing.isEmpty && (!hooks.present || agent == .copilot) && hooks.count == 0 {
+        if existing.isEmpty && (!hooks.present || agent == .copilot || agent == .agy) && hooks.count == 0 {
             return IntegrationStatus(agent: agent, state: .notInstalled, detail: "Install the integration to receive events.", lastEvent: lastEvent)
         }
         if agent == .pi && existing.isEmpty {
@@ -275,6 +336,7 @@ public struct IntegrationInstaller {
         }
         let detail = agent == .codex ? "Installed. Hook trust is not detectable: review /hooks in Codex." :
             agent == .pi ? "Installed. \(piAsk ? (richEnabled ? "Rich questions enabled." : "pi-agent-ask detected; enable rich questions below.") : "pi-agent-ask not detected globally; install with: pi install npm:pi-agent-ask") Run /reload in existing pi sessions." :
+            agent == .agy ? "Installed as plugin. Start a new agy or Antigravity session to load." :
             agent == .copilot ? "Installed. Restart Copilot CLI to load hooks. Hooks can be disabled in Copilot settings." : "Installed. Restart Claude Code to load hooks."
         return IntegrationStatus(agent: agent, state: .installed, detail: detail, lastEvent: lastEvent, richQuestionsEnabled: richEnabled, piAskDetected: piAsk)
     }
@@ -295,7 +357,7 @@ public struct IntegrationInstaller {
                     if enableRich || !install { files.append(optional) }
                 }
                 for (url, _) in files { try checkOwnership(url) }
-                if agent != .pi && agent != .copilot { try patch(agent, install: install, dryRun: true) }
+                if agent != .pi && agent != .copilot && agent != .agy { try patch(agent, install: install, dryRun: true) }
                 return (agent, files)
             }
             var messages = [String]()
@@ -306,21 +368,29 @@ public struct IntegrationInstaller {
                         if FileManager.default.fileExists(atPath: optional.path) { try FileManager.default.removeItem(at: optional) }
                     }
                     for (url, data) in files { try SafeFile.write(data, to: url) }
-                    if agent != .pi && agent != .copilot { try patch(agent, install: true) }
+                    if agent != .pi && agent != .copilot && agent != .agy { try patch(agent, install: true) }
                 } else {
-                    if agent != .pi && agent != .copilot { try patch(agent, install: false) }
+                    if agent != .pi && agent != .copilot && agent != .agy { try patch(agent, install: false) }
                     for (url, _) in files where FileManager.default.fileExists(atPath: url.path) {
                         try FileManager.default.removeItem(at: url)
                     }
-                    let skillDir = root(agent).appendingPathComponent("skills/splash-finish")
-                    if (try? FileManager.default.contentsOfDirectory(atPath: skillDir.path).isEmpty) == true {
-                        try FileManager.default.removeItem(at: skillDir)
+                    let cleanupDirs: [URL] = agent == .agy
+                        ? [agyPluginRoot().appendingPathComponent("skills/splash-finish"),
+                           agyPluginRoot().appendingPathComponent("skills"),
+                           agyPluginRoot()]
+                        : [root(agent).appendingPathComponent("skills/splash-finish")]
+                    for dir in cleanupDirs {
+                        if (try? FileManager.default.contentsOfDirectory(atPath: dir.path).isEmpty) == true {
+                            try FileManager.default.removeItem(at: dir)
+                        }
                     }
                 }
-                messages.append("\(install ? "Installed" : "Removed") \(agent.rawValue) skill\(agent == .pi ? " and extension" : " and hooks")")
+                let kind = agent == .pi ? "skill and extension" : agent == .agy ? "plugin (skill and hooks)" : "skill and hooks"
+                messages.append("\(install ? "Installed" : "Removed") \(agent.rawValue) \(kind)")
             }
             if install && agents.contains(.codex) { messages.append("Codex: review and trust the new hooks using /hooks. No security settings were changed.") }
             if install && agents.contains(.copilot) { messages.append("Copilot CLI: restart existing sessions to load hooks and skills.") }
+            if install && agents.contains(.agy) { messages.append("Antigravity: start a new agy or Antigravity session to load the plugin.") }
             if install && agents.contains(.pi) {
                 if piAgentAskDetected() {
                     messages.append(enableRich ? "Pi: rich questions enabled for pi-agent-ask." : "Pi: pi-agent-ask detected. Enable rich questions in Integrations.")

@@ -332,6 +332,161 @@ final class EventTests: XCTestCase {
         let nextStop = try parse("Stop", ["session_id": "s", "timestamp": 2001])
         XCTAssertTrue(try tied.receive(nextStop), "A later turn must reveal the inbox even if the earlier stop is still visible")
     }
+    func testAgyHookMappingTranscriptPreviewAndLifecycle() throws {
+        let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent("splash-agy-transcript-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let transcript = root.appendingPathComponent("transcript.jsonl")
+        let transcriptLines = [
+            #"{"step_index":1,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"Old prompt"}"#,
+            #"{"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","content":"Old turn reply"}"#,
+            #"{"step_index":3,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"Current prompt"}"#,
+            #"{"step_index":4,"source":"MODEL","type":"PLANNER_RESPONSE","tool_calls":[{"name":"run_command"}]}"#,
+            #"{"step_index":5,"source":"MODEL","type":"PLANNER_RESPONSE","content":"All **tests** passed."}"#
+        ].joined(separator: "\n") + "\n"
+        try SafeFile.write(Data(transcriptLines.utf8), to: transcript)
+
+        func parse(_ event: String?, _ fields: [String: Any], agent: String = "agy") throws -> AgentEvent? {
+            try HookEvent.parse(agent: agent, input: JSONSerialization.data(withJSONObject: fields), event: event)
+        }
+
+        let stop = try XCTUnwrap(parse("Stop", [
+            "conversationId": "conv-1",
+            "hookEventName": "Stop",
+            "cwd": "/code/splash",
+            "terminationReason": "NO_TOOL_CALL",
+            "fullyIdle": true,
+            "transcriptPath": transcript.path
+        ]))
+        XCTAssertEqual(stop.agent, "Antigravity")
+        XCTAssertEqual(stop.task, "conv-1")
+        XCTAssertEqual(stop.project, "splash")
+        XCTAssertEqual(stop.status, .done)
+        XCTAssertEqual(stop.title, "All **tests** passed.")
+        XCTAssertEqual(stop.detail, "Ready for review")
+
+        // A turn that produced no assistant text must not fall back to an earlier turn's reply.
+        let silentTranscript = root.appendingPathComponent("silent.jsonl")
+        let silentLines = [
+            #"{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","content":"Stale reply"}"#,
+            #"{"step_index":2,"source":"USER_EXPLICIT","type":"USER_INPUT","content":"New prompt"}"#,
+            #"{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","tool_calls":[{"name":"read_file"}]}"#
+        ].joined(separator: "\n") + "\n"
+        try SafeFile.write(Data(silentLines.utf8), to: silentTranscript)
+        let silentStop = try XCTUnwrap(parse("Stop", [
+            "conversationId": "conv-1",
+            "workspacePaths": ["/code/fallback-ws"],
+            "terminationReason": "NO_TOOL_CALL",
+            "fullyIdle": false,
+            "transcriptPath": silentTranscript.path
+        ], agent: "antigravity"))
+        XCTAssertEqual(silentStop.project, "fallback-ws")
+        XCTAssertEqual(silentStop.title, "Response completed")
+        XCTAssertEqual(silentStop.detail, "Background work may continue")
+
+        // Symlinked transcript paths must be ignored safely.
+        let link = root.appendingPathComponent("link.jsonl")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: transcript)
+        let linkedStop = try XCTUnwrap(parse("Stop", [
+            "conversationId": "conv-1",
+            "terminationReason": "NO_TOOL_CALL",
+            "transcriptPath": link.path
+        ]))
+        XCTAssertEqual(linkedStop.title, "Response completed")
+
+        // Errors and cancellations map cleanly.
+        let errored = try XCTUnwrap(parse("Stop", [
+            "conversationId": "conv-1",
+            "terminationReason": "ERROR",
+            "error": "Quota exceeded"
+        ]))
+        XCTAssertEqual(errored.status, .attention)
+        XCTAssertEqual(errored.title, "Quota exceeded")
+        let maxSteps = try XCTUnwrap(parse("Stop", [
+            "conversationId": "conv-1",
+            "terminationReason": "MAX_INVOCATIONS"
+        ]))
+        XCTAssertEqual(maxSteps.status, .attention)
+        XCTAssertEqual(maxSteps.title, "Agent reached its step limit")
+        let canceled = try XCTUnwrap(parse("Stop", [
+            "conversationId": "conv-1",
+            "terminationReason": "USER_CANCELED"
+        ]))
+        XCTAssertEqual(canceled.status, .running)
+        XCTAssertEqual(canceled.title, "Interrupted")
+
+        // ask_question raises attention with real question text; PostToolUse clears it; unrelated tools are ignored.
+        let question = try XCTUnwrap(parse("PreToolUse", [
+            "conversationId": "conv-1",
+            "hookEventName": "PreToolUse",
+            "cwd": "/code/splash",
+            "toolCall": [
+                "id": "call-1",
+                "name": "ask_question",
+                "args": [
+                    "questions": [
+                        ["question": "Deploy to production?"],
+                        ["question": "Run migrations?"]
+                    ]
+                ]
+            ]
+        ]))
+        XCTAssertEqual(question.status, .attention)
+        XCTAssertEqual(question.title, "Deploy to production?")
+        XCTAssertEqual(question.detail, "+1 more question — waiting for your answer")
+        XCTAssertEqual(question.phase, "question")
+        XCTAssertNil(try parse("PreToolUse", [
+            "conversationId": "conv-1",
+            "toolCall": ["name": "run_command", "args": ["CommandLine": "ls"]]
+        ]))
+        let answered = try XCTUnwrap(parse("PostToolUse", [
+            "conversationId": "conv-1",
+            "hookEventName": "PostToolUse",
+            "toolCall": ["name": "ask_question"]
+        ]))
+        XCTAssertEqual(answered.status, .running)
+        XCTAssertNil(answered.phase)
+        XCTAssertNil(try parse("PostToolUse", [
+            "conversationId": "conv-1",
+            "toolCall": ["name": "run_command"]
+        ]))
+
+        // PreInvocation: invocation 1 clears prior completion; invocation > 1 is progress and preserves .done / question.
+        let turnStart = try XCTUnwrap(parse("PreInvocation", ["conversationId": "conv-1", "invocationNum": 1]))
+        let midTurn = try XCTUnwrap(parse("PreInvocation", ["conversationId": "conv-1", "invocationNum": 2]))
+        XCTAssertEqual(turnStart.status, .running); XCTAssertNil(turnStart.phase)
+        XCTAssertEqual(midTurn.status, .running); XCTAssertEqual(midTurn.phase, "progress")
+
+        var inbox = Inbox()
+        try inbox.receive(stop)
+        try inbox.receive(midTurn)
+        XCTAssertEqual(inbox.items.first?.status, .done, "Mid-turn progress must not erase completion")
+        try inbox.receive(turnStart)
+        XCTAssertTrue(inbox.items.isEmpty, "A new user turn clears the previous completion")
+        try inbox.receive(question)
+        try inbox.receive(midTurn)
+        XCTAssertEqual(inbox.items.first?.title, "Deploy to production?", "Mid-turn progress must not clear an open question")
+        try inbox.receive(answered)
+        XCTAssertTrue(inbox.items.isEmpty, "PostToolUse on ask_question clears the question card")
+        try inbox.receive(stop)
+        try inbox.receive(canceled)
+        XCTAssertTrue(inbox.items.isEmpty, "USER_CANCELED clears stale cards without raising attention")
+
+        // Subagents suppress non-attention events, but still forward ask_question prompts.
+        XCTAssertNil(try parse("Stop", ["conversationId": "sub-1", "parentConversationId": "conv-1", "terminationReason": "NO_TOOL_CALL"]))
+        XCTAssertNil(try parse("PreInvocation", ["conversationId": "sub-1", "isSubagent": true, "invocationNum": 1]))
+        XCTAssertEqual(try parse("PreToolUse", [
+            "conversationId": "sub-1",
+            "parentConversationId": "conv-1",
+            "toolCall": ["name": "ask_question", "args": ["questions": [["question": "Subagent needs input"]]]]
+        ])?.status, .attention)
+
+        // Event mismatch and oversized payloads are rejected.
+        XCTAssertNil(try parse("Stop", ["conversationId": "conv-1", "hookEventName": "PreInvocation"]))
+        XCTAssertNil(try HookEvent.parse(agent: "agy", input: Data(repeating: 32, count: 1_048_577), event: "Stop"))
+    }
 }
 
 final class FilesAndInstallerTests: XCTestCase {
@@ -439,7 +594,7 @@ final class FilesAndInstallerTests: XCTestCase {
     }
     func testDoctorDetectsInstallOutdatedAndLastEvent() throws {
         var inbox = Inbox()
-        XCTAssertEqual(installer.inspect(inbox: inbox).map(\.state), [.notInstalled, .notInstalled, .notInstalled, .notInstalled])
+        XCTAssertEqual(installer.inspect(inbox: inbox).map(\.state), [.notInstalled, .notInstalled, .notInstalled, .notInstalled, .notInstalled])
         _ = try installer.run(install: true, agents: [.pi])
         try inbox.receive(AgentEvent(task: "s", agent: "pi", status: .done, title: "done"))
         let installed = installer.inspect(inbox: inbox).last!
@@ -545,6 +700,81 @@ final class FilesAndInstallerTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: other, encoding: .utf8), "user content")
         try SafeFile.write(Data("{\"version\":1}".utf8), to: path)
         XCTAssertThrowsError(try copilot.run(install: true, agents: AgentKind.allCases))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: home.appendingPathComponent(".claude/settings.json").path))
+    }
+    func testAgyManagedPluginAndRepair() throws {
+        let custom = home.appendingPathComponent("custom agy config")
+        let executable = home.appendingPathComponent("worker's agy binary")
+        let log = home.appendingPathComponent("agy-calls")
+        try SafeFile.write(Data("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HOOK_TEST_LOG\"\n".utf8), to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let agy = IntegrationInstaller(home: home, environment: ["ANTIGRAVITY_CONFIG_DIR": custom.path], executable: executable.path, resources: resources)
+
+        let unrelated = custom.appendingPathComponent("hooks.json")
+        try SafeFile.write(Data("{\"user-hook\":{}}\n".utf8), to: unrelated)
+
+        _ = try agy.run(install: true, agents: [.agy])
+        let pluginRoot = custom.appendingPathComponent("plugins/splash-finish")
+        let manifestPath = pluginRoot.appendingPathComponent("plugin.json")
+        let hooksPath = pluginRoot.appendingPathComponent("hooks.json")
+        let skillPath = pluginRoot.appendingPathComponent("skills/splash-finish/SKILL.md")
+
+        let manifestData = try Data(contentsOf: manifestPath)
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+        XCTAssertEqual(manifest["name"] as? String, "splash-finish")
+        XCTAssertTrue((manifest["description"] as? String)?.contains("Managed by Splash Finish") == true)
+
+        let hooksData = try Data(contentsOf: hooksPath)
+        let hooksRoot = try XCTUnwrap(JSONSerialization.jsonObject(with: hooksData) as? [String: Any])
+        let spec = try XCTUnwrap(hooksRoot["splash-finish"] as? [String: Any])
+        XCTAssertEqual(Set(spec.keys), Set(["PreInvocation", "PreToolUse", "PostToolUse", "Stop"]))
+
+        let stopHandlers = try XCTUnwrap(spec["Stop"] as? [[String: Any]])
+        let stopCommand = try XCTUnwrap(stopHandlers.first?["command"] as? String)
+        let preToolGroups = try XCTUnwrap(spec["PreToolUse"] as? [[String: Any]])
+        XCTAssertEqual(preToolGroups.first?["matcher"] as? String, "ask_question")
+        let preToolCommand = try XCTUnwrap((preToolGroups.first?["hooks"] as? [[String: Any]])?.first?["command"] as? String)
+
+        for (command, expectedDisabledStdout) in [(stopCommand, "{}\n"), (preToolCommand, "{\"decision\":\"allow\"}\n")] {
+            for disabled in ["0", "1"] {
+                let process = Process(); process.executableURL = URL(fileURLWithPath: "/bin/sh")
+                process.arguments = ["-c", command]
+                process.environment = ["HOOK_TEST_LOG": log.path, "SPLASH_FINISH_DISABLED": disabled]
+                let stdout = Pipe(); process.standardOutput = stdout
+                try process.run(); process.waitUntilExit(); XCTAssertEqual(process.terminationStatus, 0)
+                let output = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                if disabled == "1" {
+                    XCTAssertEqual(output, expectedDisabledStdout)
+                }
+            }
+        }
+        XCTAssertEqual(try String(contentsOf: log, encoding: .utf8),
+                       "hook agy Stop --managed-splash-finish\nhook agy PreToolUse --managed-splash-finish\n")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: skillPath.path))
+
+        // Idempotent reinstall and doctor inspection (including lastEvent alias).
+        _ = try agy.run(install: true, agents: [.agy])
+        XCTAssertEqual(try Data(contentsOf: hooksPath), hooksData)
+        var inbox = Inbox()
+        try inbox.receive(AgentEvent(task: "conv-1", agent: "Antigravity", status: .done, title: "Done"))
+        let status = try XCTUnwrap(agy.inspect(inbox: inbox).first { $0.agent == .agy })
+        XCTAssertEqual(status.state, .installed)
+        XCTAssertNotNil(status.lastEvent)
+
+        // Modified managed file reports updateAvailable and repairs cleanly.
+        try SafeFile.write(Data("{\"splash-finish\":{\"Stop\":[{\"command\":\"old --managed-splash-finish\"}]}}\n".utf8), to: hooksPath)
+        XCTAssertEqual(agy.inspect(inbox: inbox).first { $0.agent == .agy }?.state, .updateAvailable)
+        _ = try agy.run(install: true, agents: [.agy])
+        XCTAssertEqual(try Data(contentsOf: hooksPath), hooksData)
+
+        // Uninstall removes plugin files and empty folders without touching user's hooks.json.
+        _ = try agy.run(install: false, agents: [.agy])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: pluginRoot.path))
+        XCTAssertEqual(try String(contentsOf: unrelated, encoding: .utf8), "{\"user-hook\":{}}\n")
+
+        // Unmanaged plugin manifest is refused in preflight without touching other agents.
+        try SafeFile.write(Data("{\"name\":\"splash-finish\",\"description\":\"user owned\"}\n".utf8), to: manifestPath)
+        XCTAssertThrowsError(try agy.run(install: true, agents: AgentKind.allCases))
         XCTAssertFalse(FileManager.default.fileExists(atPath: home.appendingPathComponent(".claude/settings.json").path))
     }
 }

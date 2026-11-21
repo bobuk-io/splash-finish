@@ -1,6 +1,6 @@
 # Splash Finish
 
-A little landing strip for AI agents. **Splash Finish** is a native macOS menu bar app that collects finished work and requests for attention from Claude Code, Codex, GitHub Copilot CLI, and pi in one quiet window. Because one agent interrupting you is a notification; five agents doing it is a committee.
+A little landing strip for AI agents. **Splash Finish** is a native macOS menu bar app that collects finished work and requests for attention from Claude Code, Codex, GitHub Copilot CLI, Antigravity (`agy`), and pi in one quiet window. Because one agent interrupting you is a notification; five agents doing it is a committee.
 
 ![Splash Finish inbox](screenshots/splash-finish.png)
 
@@ -41,6 +41,7 @@ splash-finish install-skills
 - **Claude Code:** start a new session to load the hooks and skill.
 - **Codex:** open `/hooks`, review and trust the new hooks, then restart if needed. Splash Finish does not bypass Codex's hook trust. Hooks must be enabled in your Codex configuration.
 - **GitHub Copilot CLI:** restart existing sessions to load the skill and hooks. This integration is for the local CLI, not GitHub's cloud coding agent.
+- **Antigravity (`agy`):** start a new session to load the plugin installed under `~/.gemini/config/plugins/splash-finish`. Works with Antigravity CLI (`agy`), Antigravity 2.0, and Antigravity IDE.
 - **pi:** use `/reload` in running sessions, or start a new one. Requires pi **1.5.0+** for the `agent_settled` and `ui_prompt_start` events.
 
 Installation of integrations is explicit. The app will not edit agent settings just because you opened it.
@@ -132,7 +133,7 @@ Deep links are not authenticated: any local app can send them. They display boun
 
 ```sh
 splash-finish install-skills                 # all agents
-splash-finish install-skills --agent pi      # claude | codex | copilot | pi
+splash-finish install-skills --agent pi      # claude | codex | copilot | agy | pi
 splash-finish uninstall-skills               # remove all Splash Finish integrations
 splash-finish uninstall-skills --agent codex
 ```
@@ -142,9 +143,12 @@ splash-finish uninstall-skills --agent codex
 | Claude Code | user skill and `~/.claude/settings.json` hooks | `Stop`, `StopFailure`, permission and supported input notifications |
 | Codex | user skill and `~/.codex/hooks.json` hooks | `Stop`, `PermissionRequest`, and accepted async questions when exposed through `PostToolUse`; `/hooks` trust required |
 | GitHub Copilot CLI | user skill and `~/.copilot/hooks/splash-finish.json` | turn end, new prompt, session end, and supported permission/input notifications |
+| Antigravity (`agy`) | native plugin at `~/.gemini/config/plugins/splash-finish` (`plugin.json`, `hooks.json`, and skill) | `Stop` (with final reply preview, errors, and cancellation), `ask_question` prompts, and new-turn clearing via `PreInvocation` |
 | pi | user skill and `~/.pi/agent/extensions/splash-finish.ts` | settled, extension UI prompts, common question tools, errors and interruption |
 
 Pi notifications are fire-and-forget and never delay the agent. User-opened menus while Pi is idle (such as `/jewter`) do not trigger attention notifications or clear completed items; blocking dialogs during an active agent run still report requests for input. Subagent sessions (pi-subagents background children and in-process `run-N` sessions) are filtered: only requests for input are forwarded, so a fan-out of workers does not flood the inbox.
+
+Antigravity installs as a self-contained plugin (`~/.gemini/config/plugins/splash-finish`, honoring `ANTIGRAVITY_CONFIG_DIR`) without editing your own `~/.gemini/config/hooks.json`. You can also toggle it with `agy plugin disable splash-finish` / `agy plugin enable splash-finish`. `PreToolUse` and `PostToolUse` are matched strictly to `ask_question` (never gating other tools), and `Stop` reads only the tail of the current-user-owned local `transcriptPath` to show the latest reply preview without storing transcripts. User cancellations (`USER_CANCELED`) clear the card without raising an error; subagent non-attention events are ignored.
 
 Copilot reports “Agent turn ended” without reading the answer or transcript. A turn can end while background work is still running; a later turn produces another notification. Only `permission_prompt` and `elicitation_dialog` notifications request attention; background notifications and subagent events are ignored. Tool completions cannot identify which question was resolved, so attention remains until a new prompt, turn end, or session end.
 
@@ -158,7 +162,7 @@ Codex async question cards remain in the inbox during tool activity, and are cle
 
 Open **Integrations…** in the menu bar or run `splash-finish doctor` to inspect installed files, hooks, update availability, and the last recorded event. Codex hook trust is not exposed to the inspector; use `/hooks` to check it. Event timestamps are recorded only by app versions supporting this feature.
 
-The installer preserves unrelated hooks/settings, rejects unmanaged files and symlinked configuration paths, and writes a uniquely named backup before changing an existing shared JSON config, keeping the three newest backups. Reinstall updates only Splash Finish entries, and the app offers a repair when its version or location changed because hooks embed the absolute path of the binary. Config locations honor `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, and `PI_CODING_AGENT_DIR`; Copilot skills and hooks both use `COPILOT_HOME` when set. Removal does not delete the app, unrelated hooks, or configuration backups. Restart Copilot CLI or run `/reload` in existing pi sessions after changes.
+The installer preserves unrelated hooks/settings, rejects unmanaged files and symlinked configuration paths, and writes a uniquely named backup before changing an existing shared JSON config, keeping the three newest backups. Reinstall updates only Splash Finish entries, and the app offers a repair when its version or location changed because hooks embed the absolute path of the binary. Config locations honor `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `ANTIGRAVITY_CONFIG_DIR`, and `PI_CODING_AGENT_DIR`; Copilot skills and hooks both use `COPILOT_HOME` when set, and Antigravity installs its plugin under `$ANTIGRAVITY_CONFIG_DIR/plugins/splash-finish`. Removal does not delete the app, unrelated hooks, or configuration backups. Start a new Antigravity / `agy` session, restart Copilot CLI, or run `/reload` in existing pi sessions after changes.
 
 ### Rich pi questions
 
