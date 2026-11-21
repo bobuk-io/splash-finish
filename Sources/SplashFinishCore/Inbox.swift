@@ -10,6 +10,8 @@ public struct EventOrder: Codable, Equatable, Sendable {
 public struct Inbox: Codable, Equatable, Sendable {
     public private(set) var items: [AgentEvent] = []
     public private(set) var snoozedUntil: Date?
+    // A deadline without this flag retains the strict behavior of existing state files.
+    private var snoozeEndsOnNewEvent: Bool?
     public private(set) var seenEventIDs: [String] = []
     // Optional for compatibility with state files written by older versions.
     public private(set) var latestOrders: [String: EventOrder]?
@@ -18,7 +20,7 @@ public struct Inbox: Codable, Equatable, Sendable {
     public var attention: [AgentEvent] { items.filter { $0.status == .attention } }
     public var completed: [AgentEvent] { items.filter { $0.status == .done } }
 
-    /// Returns true only when this event should reveal the panel; never while snoozed.
+    /// Returns true only when this event should reveal the panel; never during a timed snooze.
     @discardableResult public mutating func receive(_ raw: AgentEvent) throws -> Bool {
         let event = try raw.validated()
         guard !seenEventIDs.contains(event.id) else { return false }
@@ -56,7 +58,7 @@ public struct Inbox: Codable, Equatable, Sendable {
                 return false
             }
             items.removeAll { $0.key == event.key }
-            if items.isEmpty { snoozedUntil = nil }
+            cancelShortSnoozeIfEmpty()
             return false
         }
         if let previous = items.first(where: { $0.key == event.key }),
@@ -65,9 +67,9 @@ public struct Inbox: Codable, Equatable, Sendable {
         if let index = items.firstIndex(where: { $0.key == event.key }) { items[index] = event }
         else { items.append(event) }
         items = Array(items.suffix(200))
-        // Snooze holds until its deadline or an explicit show; the wake timer
-        // reveals everything collected meanwhile.
-        return snoozedUntil == nil
+        guard snoozedUntil == nil || snoozeEndsOnNewEvent == true else { return false }
+        reveal()
+        return true
     }
 
     /// Stable key for per-agent bookkeeping; display names may gain spaces or case.
@@ -77,7 +79,7 @@ public struct Inbox: Codable, Equatable, Sendable {
 
     public mutating func dismiss(key: String) {
         items.removeAll { $0.key == key }
-        if items.isEmpty { snoozedUntil = nil }
+        cancelShortSnoozeIfEmpty()
     }
     /// Consume only a successfully opened notification. Navigation can finish after
     /// a newer event for the same task arrives; that newer card must stay in the inbox.
@@ -86,28 +88,46 @@ public struct Inbox: Codable, Equatable, Sendable {
         dismiss(key: event.key)
         return true
     }
-    public mutating func clear() { items.removeAll(); snoozedUntil = nil }
+    public mutating func clear() {
+        items.removeAll()
+        cancelShortSnoozeIfEmpty()
+    }
     /// Dismiss everything except live keys, e.g. questions that are still connected.
     /// The per-item path stays in the caller because only it knows the open connections.
     public mutating func dismissAll(except keep: Set<String>) {
         items.removeAll { !keep.contains($0.key) }
-        if items.isEmpty { snoozedUntil = nil }
+        cancelShortSnoozeIfEmpty()
     }
     /// Question placeholders are tied to ephemeral sockets and are stale after a restart.
     public mutating func discardQuestionPlaceholders() {
         items.removeAll { $0.agent.lowercased() == "pi" && $0.status == .attention && $0.task.hasPrefix(QuestionTask.prefix) }
-        if items.isEmpty { snoozedUntil = nil }
+        cancelShortSnoozeIfEmpty()
     }
-    public mutating func snooze(now: Date = Date(), duration: TimeInterval = 15 * 60) {
-        guard !items.isEmpty else { return }
-        snoozedUntil = now.addingTimeInterval(duration)
+    public mutating func snooze(now: Date = Date()) {
+        guard !items.isEmpty, !isTimedSnoozeActive(now: now) else { return }
+        snoozedUntil = now.addingTimeInterval(15 * 60)
+        snoozeEndsOnNewEvent = true
+    }
+    public mutating func snooze(until deadline: Date) {
+        snoozedUntil = deadline
+        snoozeEndsOnNewEvent = nil
+    }
+    public func isTimedSnoozeActive(now: Date = Date()) -> Bool {
+        guard snoozeEndsOnNewEvent != true, let deadline = snoozedUntil else { return false }
+        return deadline > now
     }
     @discardableResult public mutating func wakeIfDue(now: Date = Date()) -> Bool {
         guard let deadline = snoozedUntil, now >= deadline else { return false }
-        snoozedUntil = nil
+        reveal()
         return !items.isEmpty
     }
-    public mutating func reveal() { snoozedUntil = nil }
+    public mutating func reveal() {
+        snoozedUntil = nil
+        snoozeEndsOnNewEvent = nil
+    }
+    private mutating func cancelShortSnoozeIfEmpty() {
+        if items.isEmpty, snoozeEndsOnNewEvent == true { reveal() }
+    }
 }
 
 public enum QuestionTask {

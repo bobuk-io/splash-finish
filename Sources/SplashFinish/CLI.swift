@@ -14,7 +14,7 @@ import SplashFinishCore
 
       show                         Show the inbox
       notify                       Send an agent event (see options below)
-      snooze                       Hide for 15 minutes; new events still collect
+      snooze                       Hide until a new notification arrives, up to 15 minutes
       clear                        Dismiss every notification and hide
       status [--raw]               Summarize the inbox, or print full JSON with --raw
       doctor                       Diagnose agent integrations

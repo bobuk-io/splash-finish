@@ -24,40 +24,66 @@ final class InboxTests: XCTestCase {
         try inbox.receive(event(status: .running)); XCTAssertTrue(inbox.items.isEmpty)
     }
     func testSnoozeDeadlineAndEarlyWake() throws {
-        let now = Date(timeIntervalSince1970: 1000)
+        let now = Date()
         var inbox = Inbox(); let first = event()
         try inbox.receive(first); inbox.snooze(now: now)
         XCTAssertEqual(inbox.snoozedUntil, now.addingTimeInterval(900))
         XCTAssertFalse(inbox.wakeIfDue(now: now.addingTimeInterval(899)))
         XCTAssertFalse(try inbox.receive(first)); XCTAssertNotNil(inbox.snoozedUntil)
         XCTAssertFalse(try inbox.receive(event())); XCTAssertNotNil(inbox.snoozedUntil, "Identical updates must not wake snooze")
-        XCTAssertFalse(try inbox.receive(event("two")), "A new event must not reveal a snoozed panel")
-        XCTAssertEqual(inbox.snoozedUntil, now.addingTimeInterval(900))
+        XCTAssertTrue(try inbox.receive(event("two")), "A new event ends short snooze")
+        XCTAssertNil(inbox.snoozedUntil)
+        inbox.snooze(now: now)
         XCTAssertTrue(inbox.wakeIfDue(now: now.addingTimeInterval(900)))
         XCTAssertNil(inbox.snoozedUntil)
-        inbox.snooze(now: now); inbox.reveal(); XCTAssertNil(inbox.snoozedUntil, "An explicit show ends snooze")
+        inbox.snooze(now: now)
+        inbox.reveal()
+        XCTAssertNil(inbox.snoozedUntil, "An explicit show ends short snooze")
     }
     func testSnoozeKeepsPanelHiddenWhenAnotherTaskArrives() throws {
-        let now = Date(timeIntervalSince1970: 1000)
+        let now = Date()
         var inbox = Inbox(); try inbox.receive(event("one"))
-        inbox.snooze(now: now, duration: 3600)
         let deadline = now.addingTimeInterval(3600)
-        try inbox.receive(event("two"))
+        inbox.snooze(until: deadline)
+        XCTAssertFalse(try inbox.receive(event("two")))
         XCTAssertEqual(inbox.items.map(\.task), ["one", "two"])
         XCTAssertEqual(inbox.snoozedUntil, deadline)
         XCTAssertFalse(inbox.wakeIfDue(now: deadline.addingTimeInterval(-1)))
         XCTAssertTrue(inbox.wakeIfDue(now: deadline))
     }
     func testSnoozeKeepsPanelHiddenWhenSameTaskChanges() throws {
-        let now = Date(timeIntervalSince1970: 1000)
+        let now = Date()
         var inbox = Inbox(); try inbox.receive(event("one"))
-        inbox.snooze(now: now, duration: 3600)
         let deadline = now.addingTimeInterval(3600)
-        try inbox.receive(event("one", title: "New answer"))
+        inbox.snooze(until: deadline)
+        XCTAssertFalse(try inbox.receive(event("one", title: "New answer")))
         XCTAssertEqual(inbox.items.map(\.title), ["New answer"])
         XCTAssertEqual(inbox.snoozedUntil, deadline)
         XCTAssertFalse(inbox.wakeIfDue(now: deadline.addingTimeInterval(-1)))
-        XCTAssertTrue(inbox.wakeIfDue(now: deadline))
+        inbox.reveal()
+        XCTAssertNil(inbox.snoozedUntil, "An explicit show ends timed snooze")
+    }
+    func testTimedSnoozeSurvivesEmptyInboxAndStateRestore() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let state = StateFile(url: root.appendingPathComponent("state.json"))
+        let deadline = Date().addingTimeInterval(3600)
+        var inbox = Inbox()
+
+        inbox.snooze(until: deadline)
+        XCTAssertEqual(inbox.snoozedUntil, deadline, "Timed snooze can start with an empty inbox")
+        XCTAssertFalse(try inbox.receive(event()))
+        inbox.dismiss(key: "codex:one")
+        XCTAssertTrue(inbox.items.isEmpty)
+        XCTAssertEqual(inbox.snoozedUntil, deadline, "Dismissing the last card does not end timed snooze")
+
+        try state.save(inbox)
+        inbox = try state.load()
+        XCTAssertTrue(inbox.items.isEmpty)
+        XCTAssertEqual(inbox.snoozedUntil, deadline)
+        XCTAssertFalse(try inbox.receive(event("two", status: .attention)))
+        XCTAssertEqual(inbox.attention.map(\.task), ["two"])
+        XCTAssertEqual(inbox.snoozedUntil, deadline)
     }
     func testResumeDoesNotWakeAndFinalDismissCancelsSnooze() throws {
         var inbox = Inbox(); try inbox.receive(event()); try inbox.receive(event("two"))
@@ -122,15 +148,14 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(QuestionTask.id(fromTask: "question-abc"), "abc")
         XCTAssertNil(QuestionTask.id(fromTask: "other"))
     }
-    func testSnoozeDurationAndMorningDeadline() throws {
+    func testSnoozeDurationAndMorningDeadline() {
         var inbox = Inbox()
-        try inbox.receive(event())
         let now = Date(timeIntervalSince1970: 1_700_000_000)
-        inbox.snooze(now: now, duration: 3600)
+        inbox.snooze(until: now.addingTimeInterval(3600))
         XCTAssertEqual(inbox.snoozedUntil, now.addingTimeInterval(3600))
         let morning = Snooze.untilTomorrowMorning(now: now)
         XCTAssertGreaterThanOrEqual(morning, 60)
-        inbox.snooze(now: now, duration: morning)
+        inbox.snooze(until: now.addingTimeInterval(morning))
         XCTAssertEqual(inbox.snoozedUntil, now.addingTimeInterval(morning))
     }
     func testLegacyInboxDecodesWithoutOrderingMetadata() throws {
