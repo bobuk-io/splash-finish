@@ -154,11 +154,20 @@ import SplashFinishCore
         selection.reconcile(keys: orderedKeys)
         persist(); scheduleWake(); onChange?(false)
     }
-    func snooze(duration: TimeInterval = 15 * 60) {
+    func snooze(until deadline: Date? = nil) {
         message = nil
-        inbox.snooze(duration: duration); persist(); scheduleWake(); onChange?(false)
+        if let deadline { inbox.snooze(until: deadline) }
+        else { inbox.snooze() }
+        persist(); scheduleWake(); onChange?(false)
+    }
+    func unsnooze() {
+        guard isSnoozed else { return }
+        inbox.reveal(); persist(); scheduleWake(); onChange?(false)
     }
     func show() { inbox.reveal(); persist(); scheduleWake(); onChange?(true) }
+    func reopen() {
+        if !inbox.isTimedSnoozeActive() { show() }
+    }
     func report(_ error: Error) {
         message = error.localizedDescription
         logger.error("\(error.localizedDescription, privacy: .public)")
@@ -188,8 +197,10 @@ import SplashFinishCore
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.timer = nil; self.timerDeadline = nil
-                if self.inbox.wakeIfDue() { self.persist(); self.onChange?(self.shouldReveal(true)) }
-                else { self.scheduleWake() }
+                let reveal = self.inbox.wakeIfDue()
+                if self.inbox.snoozedUntil != nil { self.scheduleWake(); return }
+                self.persist()
+                self.onChange?(self.shouldReveal(reveal))
             }
         }
     }

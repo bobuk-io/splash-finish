@@ -137,11 +137,11 @@ class AppSmokeTests(unittest.TestCase):
         self.run_cli("notify", "--agent", "Codex", "--task", "one", "--title", "First task")
         self.wait_for(lambda s: len(s["items"]) == 1)
         self.run_cli("snooze")
-        snoozed = self.wait_for(lambda s: bool(s.get("snoozedUntil")))
+        self.wait_for(lambda s: bool(s.get("snoozedUntil")))
         self.run_cli("notify", "--agent", "pi", "--task", "two", "--title", "Second task")
         state = self.wait_for(lambda s: len(s["items"]) == 2)
         self.assertEqual({item["task"] for item in state["items"]}, {"one", "two"})
-        self.assertEqual(state.get("snoozedUntil"), snoozed["snoozedUntil"], "A new event must not end snooze")
+        self.assertIsNone(state.get("snoozedUntil"), "A new event must end short snooze")
         hook = {"session_id": "three", "hook_event_name": "PermissionRequest", "tool_name": "Bash", "cwd": "/tmp/demo"}
         result = self.run_cli("hook", "claude", "--managed-splash-finish", input=json.dumps(hook))
         self.assertEqual(result.stdout.strip(), "{}")
