@@ -322,7 +322,7 @@ import SplashFinishCore
     private func changeSkills(install: Bool) {
         let alert = NSAlert()
         alert.messageText = install ? "Install agent integrations?" : "Remove agent integrations?"
-        alert.informativeText = "This updates your Claude Code and Codex hooks, their Splash Finish skills, and the pi extension. Existing unrelated settings are kept. Codex requires hook trust via /hooks."
+        alert.informativeText = "This updates your Claude Code, Codex and Copilot CLI hooks, their Splash Finish skills, and the pi extension. Existing unrelated settings are kept. Codex requires hook trust via /hooks."
         alert.addButton(withTitle: install ? "Install" : "Remove")
         alert.addButton(withTitle: "Cancel")
         let piAsk = (try? CLI.integrationInstaller().piAgentAskDetected()) ?? false
