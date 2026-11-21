@@ -29,8 +29,11 @@ public extension AttributedString {
         return result
     }
 
-    /// `text` with the letters that `query` matched highlighted; plain when nothing matched.
+    /// `text` with the letters that `query` matched highlighted (also by the fallback pass of a
+    /// 3-letter query); plain when nothing matched.
     static func highlighting(_ text: String, query: String, color: Color? = nil) -> AttributedString {
-        highlighting(text, positions: FuzzyMatcher.match(query, in: text)?.positions ?? [], color: color)
+        let prepared = FuzzyQuery(query)
+        let match = prepared.match(text) ?? prepared.match(text, fallback: true)
+        return highlighting(text, positions: match?.positions ?? [], color: color)
     }
 }

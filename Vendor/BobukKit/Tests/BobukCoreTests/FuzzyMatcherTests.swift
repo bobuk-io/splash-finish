@@ -43,6 +43,21 @@ import Testing
         #expect(FuzzyMatcher.match("1pvd", in: "1Password", typos: false) == nil)
     }
 
+    @Test func fallbackTypoForThreeLetters() {
+        let query = FuzzyQuery("1pv")
+        #expect(query.hasFallback)
+        #expect(query.match("1Password") == nil)
+        #expect(query.match("1Password", fallback: true)?.kind == .typo)
+        #expect(!FuzzyQuery("1p").hasFallback)
+        #expect(!FuzzyQuery("1pwd").hasFallback)
+        #expect(!FuzzyQuery("1pv", typos: false).hasFallback)
+        #expect(FuzzyQuery("xpv").match("1Password", fallback: true) == nil)
+        // The filter falls back only when the normal pass matched nothing.
+        let apps = ["1Password", "Safari", "Spotify", "Slack"]
+        #expect(FuzzyMatcher.filter(apps, matching: "1pv", texts: { [$0] }) == ["1Password"])
+        #expect(FuzzyMatcher.filter(apps, matching: "saf", texts: { [$0] }) == ["Safari"])
+    }
+
     @Test func foldingAndLayouts() {
         #expect(kind("cafe", "Café Racer") == .prefix)
         #expect(kind("CAFÉ", "cafe") == .exact)

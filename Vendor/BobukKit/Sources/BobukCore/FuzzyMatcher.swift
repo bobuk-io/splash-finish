@@ -45,8 +45,10 @@ public struct FuzzyMatch: Sendable, Equatable {
 /// Matching is an fzf-style alignment: query letters in order, with bonuses for word starts,
 /// camel case humps and consecutive letters, and penalties for gaps. A query of 4 or more letters
 /// may also have one typo (8 or more: two): a wrong letter or an extra letter. The first letter
-/// never is a typo. Case, diacritics and width are ignored, and the query is also tried as typed
-/// on the wrong keyboard layout (`KeyboardLayoutSwap`).
+/// never is a typo. A 3-letter query gets one typo only in the fallback pass (`match(_:fallback:)`),
+/// which callers run when the normal pass found nothing in the whole list: "1pv" → "1Password"
+/// without a typo match for every "saf". Case, diacritics and width are ignored, and the query is
+/// also tried as typed on the wrong keyboard layout (`KeyboardLayoutSwap`).
 public struct FuzzyQuery: Sendable {
     struct Variant: Sendable {
         /// Folded query words.
@@ -71,24 +73,35 @@ public struct FuzzyQuery: Sendable {
     /// No letters or digits: the query matches nothing (callers usually list everything).
     public var isEmpty: Bool { variants.isEmpty }
 
-    /// The best match in `text`, or nil.
-    public func match(_ text: String) -> FuzzyMatch? {
+    /// A fallback pass may find matches the normal pass does not: the query is 3 letters long.
+    public var hasFallback: Bool {
+        allowsTypos && variants.contains {
+            FuzzyMatcher.fallbackTypos(forQueryLength: $0.compact.count) > FuzzyMatcher.allowedTypos(forQueryLength: $0.compact.count)
+        }
+    }
+
+    /// The best match in `text`, or nil. `fallback` allows a typo in 3-letter queries too; use it
+    /// only after the normal pass matched no item of the list.
+    public func match(_ text: String, fallback: Bool = false) -> FuzzyMatch? {
         guard !variants.isEmpty else { return nil }
         let target = FuzzyText(text)
         guard !target.words.isEmpty else { return nil }
         var best: FuzzyMatch?
         for variant in variants {
-            guard let found = FuzzyMatcher.match(variant, in: target, typos: allowsTypos) else { continue }
+            let length = variant.compact.count
+            let typos = !allowsTypos ? 0 : fallback ? FuzzyMatcher.fallbackTypos(forQueryLength: length)
+                                                    : FuzzyMatcher.allowedTypos(forQueryLength: length)
+            guard let found = FuzzyMatcher.match(variant, in: target, typos: typos) else { continue }
             if best.map({ found.isBetter(than: $0) }) ?? true { best = found }
         }
         return best
     }
 
     /// The best match in any of `texts`, with the index of that text.
-    public func bestMatch(in texts: [String]) -> (index: Int, match: FuzzyMatch)? {
+    public func bestMatch(in texts: [String], fallback: Bool = false) -> (index: Int, match: FuzzyMatch)? {
         var best: (index: Int, match: FuzzyMatch)?
         for (index, text) in texts.enumerated() {
-            guard let found = match(text) else { continue }
+            guard let found = match(text, fallback: fallback) else { continue }
             if best.map({ found.isBetter(than: $0.match) }) ?? true { best = (index, found) }
         }
         return best
@@ -116,19 +129,33 @@ public enum FuzzyMatcher {
         length >= 8 ? 2 : length >= 4 ? 1 : 0
     }
 
+    /// Typos allowed in the fallback pass: one also for a 3-letter query.
+    public static func fallbackTypos(forQueryLength length: Int) -> Int {
+        max(allowedTypos(forQueryLength: length), length >= 3 ? 1 : 0)
+    }
+
     /// The best match of `query` in `text`, or nil. See `FuzzyQuery`.
     public static func match(_ query: String, in text: String, layoutSwap: Bool = true, typos: Bool = true) -> FuzzyMatch? {
         FuzzyQuery(query, layoutSwap: layoutSwap, typos: typos).match(text)
     }
 
     /// The items that match `query` in any of their texts: better kind first, then higher score,
-    /// then the given order. A query without letters or digits keeps every item in order.
+    /// then the given order. When nothing matches, a 3-letter query is tried again with one typo
+    /// (`FuzzyQuery.hasFallback`). A query without letters or digits keeps every item in order.
     public static func filter<Item>(_ items: [Item], matching query: String, layoutSwap: Bool = true,
                                     typos: Bool = true, texts: (Item) -> [String]) -> [Item] {
         let prepared = FuzzyQuery(query, layoutSwap: layoutSwap, typos: typos)
         guard !prepared.isEmpty else { return items }
-        return items.enumerated()
-            .compactMap { offset, item in prepared.bestMatch(in: texts(item)).map { (offset, item, $0.match) } }
+        let candidates = items.enumerated().map { ($0.offset, $0.element, texts($0.element)) }
+        var found = candidates.compactMap { offset, item, texts in
+            prepared.bestMatch(in: texts).map { (offset, item, $0.match) }
+        }
+        if found.isEmpty, prepared.hasFallback {
+            found = candidates.compactMap { offset, item, texts in
+                prepared.bestMatch(in: texts, fallback: true).map { (offset, item, $0.match) }
+            }
+        }
+        return found
             .sorted { lhs, rhs in
                 if lhs.2.kind != rhs.2.kind { return lhs.2.kind < rhs.2.kind }
                 if lhs.2.score != rhs.2.score { return lhs.2.score > rhs.2.score }
@@ -154,9 +181,8 @@ public enum FuzzyMatcher {
 
     // MARK: Matching
 
-    static func match(_ query: FuzzyQuery.Variant, in target: FuzzyText, typos: Bool) -> FuzzyMatch? {
+    static func match(_ query: FuzzyQuery.Variant, in target: FuzzyText, typos allowed: Int) -> FuzzyMatch? {
         let kind = contiguousKind(query, target)
-        let allowed = typos ? allowedTypos(forQueryLength: query.compact.count) : 0
         if kind == nil {
             if allowed == 0 {
                 guard isSubsequence(query.compact, of: target.chars) else { return nil }

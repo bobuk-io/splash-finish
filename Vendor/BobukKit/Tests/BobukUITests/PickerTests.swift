@@ -69,6 +69,11 @@ struct FuzzyHighlightTests {
         #expect(text.runs.first?.foregroundColor == .orange)
     }
 
+    @Test func fallbackMatchIsHighlighted() {
+        let text = AttributedString.highlighting("1Password", query: "1pv")
+        #expect(text.runs.contains { $0.inlinePresentationIntent == .stronglyEmphasized })
+    }
+
     @Test func plainWithoutMatch() {
         let text = AttributedString.highlighting("Safari", query: "xyz")
         #expect(text.runs.count == 1)
