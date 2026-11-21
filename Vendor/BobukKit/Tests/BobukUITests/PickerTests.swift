@@ -59,3 +59,19 @@ struct PickerSelectionTests {
         #expect(abs(row.fittingSize.height - PickerMetrics.rowHeight) < 0.01)
     }
 }
+
+struct FuzzyHighlightTests {
+    @Test func marksMatchedCharactersInRuns() {
+        let text = AttributedString.highlighting("1Password", query: "1pwd", color: .orange)
+        let runs = text.runs.map { (String(text[$0.range].characters), $0.inlinePresentationIntent == .stronglyEmphasized) }
+        #expect(runs.map(\.0) == ["1P", "ass", "w", "or", "d"])
+        #expect(runs.map(\.1) == [true, false, true, false, true])
+        #expect(text.runs.first?.foregroundColor == .orange)
+    }
+
+    @Test func plainWithoutMatch() {
+        let text = AttributedString.highlighting("Safari", query: "xyz")
+        #expect(text.runs.count == 1)
+        #expect(String(text.characters) == "Safari")
+    }
+}

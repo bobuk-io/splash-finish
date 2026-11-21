@@ -20,7 +20,8 @@ import BobukUpdates
                 PickerRow(selected: index == 1, palette: palette) {
                     HStack(spacing: PickerMetrics.columnSpacing) {
                         PickerBadge(alias, width: badgeWidth, palette: palette)
-                        Text(["Home Control", "Project Notes", "Long labels stay inside the row"][index])
+                        Text(AttributedString.highlighting(["Home Control", "Project Notes", "Long labels stay inside the row"][index],
+                                                            query: "notes", color: Color(nsColor: palette.accent)))
                             .font(.system(size: 13)).lineLimit(1).truncationMode(.middle)
                         Spacer(minLength: 0)
                     }

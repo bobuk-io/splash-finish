@@ -34,6 +34,7 @@ need it, add it here, not to the app. Agents: read `AGENTS.md`.
 | Named key codes instead of 53/36/126/43, layout-independent digits | `VirtualKey` | BobukCore |
 | The Latin key of an event on a Russian/Ukrainian layout | `KeyTranslator.latin`, `KeyEquivalent.latin(of:)` | BobukSystem / BobukUI |
 | Text typed on the wrong layout (ыфафкш → safari) | `KeyboardLayoutSwap.variants(of:)` | BobukCore |
+| Fuzzy search in names and choices (1pwd, 1pvd → 1Password; vsc → Visual Studio Code; wrong layout) | `FuzzyQuery(query).match(text)` (`kind`, `score`, `positions`), `FuzzyMatcher.filter(_:matching:texts:)`, `AttributedString.highlighting(_:query:color:)` for matched letters | BobukCore / BobukUI |
 | Only one shortcut recorder at a time, hotkeys off while recording | `HotkeyRecordingGate` | BobukSystem |
 | Launch at login | `LoginItem` | BobukSystem |
 | Accessibility permission | `AccessibilityPermission` | BobukSystem |
