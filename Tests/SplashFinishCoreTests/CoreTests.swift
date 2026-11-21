@@ -95,6 +95,14 @@ final class InboxTests: XCTestCase {
         try inbox.receive(AgentEvent(task: "s", agent: "Codex", status: .running, title: "Working"))
         XCTAssertTrue(inbox.items.isEmpty)
     }
+    func testAsyncQuestionSurvivesProgressUntilUserResponds() throws {
+        var inbox = Inbox()
+        try inbox.receive(AgentEvent(task: "s", agent: "Codex", status: .attention, title: "Question?", phase: "question"))
+        try inbox.receive(AgentEvent(task: "s", agent: "Codex", status: .running, title: "Working", phase: "progress"))
+        XCTAssertEqual(inbox.items.first?.title, "Question?")
+        try inbox.receive(AgentEvent(task: "s", agent: "Codex", status: .running, title: "Working"))
+        XCTAssertTrue(inbox.items.isEmpty)
+    }
     func testAgentKeysAreNormalized() throws {
         var inbox = Inbox()
         try inbox.receive(AgentEvent(task: "s", agent: "Claude Code", status: .done, title: "x"))
@@ -212,6 +220,13 @@ final class EventTests: XCTestCase {
         XCTAssertEqual(try parse("PermissionRequest")?.project, "backend")
         XCTAssertEqual(try parse("UserPromptSubmit")?.status, .running)
         XCTAssertEqual(try parse("PostToolUse")?.status, .running)
+        let input: [String: Any] = ["questions": [["title": "Which season?"]]]
+        let extra: [String: Any] = ["tool_name": "request_user_input_async", "tool_input": input, "tool_response": "{\"accepted\":true}"]
+        let question = try parse("PostToolUse", extra: extra)
+        XCTAssertEqual(question?.status, .attention)
+        XCTAssertEqual(question?.title, "Which season?")
+        XCTAssertEqual(question?.phase, "question")
+        XCTAssertNil(try parse("PostToolUse", extra: ["tool_name": "request_user_input_async", "tool_response": "{\"accepted\":false}"]))
         XCTAssertEqual(try parse("Interrupt")?.status, .running)
         XCTAssertNil(try parse("Notification", extra: ["notification_type": "auth_success"], agent: "claude"))
         XCTAssertEqual(try parse("Notification", extra: ["notification_type": "permission_prompt"], agent: "claude")?.status, .attention)

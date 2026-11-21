@@ -137,7 +137,7 @@ splash-finish uninstall-skills --agent codex
 | Agent | What is installed | Signals |
 |---|---|---|
 | Claude Code | user skill and `~/.claude/settings.json` hooks | `Stop`, `StopFailure`, permission and supported input notifications |
-| Codex | user skill and `~/.codex/hooks.json` hooks | `Stop` and `PermissionRequest`; `/hooks` trust required |
+| Codex | user skill and `~/.codex/hooks.json` hooks | `Stop`, `PermissionRequest`, and accepted async questions when exposed through `PostToolUse`; `/hooks` trust required |
 | pi | user skill and `~/.pi/agent/extensions/splash-finish.ts` | settled, extension UI prompts, common question tools, errors and interruption |
 
 Pi notifications are fire-and-forget and never delay the agent. User-opened menus while Pi is idle (such as `/jewter`) do not trigger attention notifications or clear completed items; blocking dialogs during an active agent run still report requests for input. Subagent sessions (pi-subagents background children and in-process `run-N` sessions) are filtered: only requests for input are forwarded, so a fan-out of workers does not flood the inbox.
@@ -147,6 +147,8 @@ Set `SPLASH_FINISH_DISABLED=1` in managed worker processes (for example pi-selec
 In 0.3.11, Codex hook events with an explicitly null or empty transcript path are ignored. This keeps temporary sessions used for tab titles and suggestions out of the inbox. Normal sessions and older hook payloads without a transcript-path field remain supported; JSON answers are not filtered by their text.
 
 Completions mean **the agent stopped responding**, not that its claims or tests were independently verified. Agent hook APIs and external tools vary by version; not every possible request for input is observable. Background agents, remote containers and hosts that do not expose the local macOS app may need to send events explicitly. Claude Code can emit the sandbox network permission notification after a delay. Other installed hooks may change agent behavior after a `Stop` event; Splash Finish is only an observer and cannot predict subsequent continuation.
+
+Codex async question cards remain in the inbox during tool activity, and are cleared when the user sends a prompt or the session ends. The next completion replaces the question. Availability depends on the Codex host exposing the question tool to hooks; Splash Finish cannot answer the question itself.
 
 Open **Integrations…** in the menu bar or run `splash-finish doctor` to inspect installed files, hooks, update availability, and the last recorded event. Codex hook trust is not exposed to the inspector; use `/hooks` to check it. Event timestamps are recorded only by app versions supporting this feature.
 
