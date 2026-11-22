@@ -23,12 +23,26 @@ import SwiftUI
     private let makeClient: () throws -> ACPClient
     private let preparePrompt: (String) -> String
     private let displayReply: (String) -> String
+    private let missingModelsMessage: String?
 
+    /// Supply `missingModelsMessage` for agents that cannot answer without a model catalog.
     public init(makeClient: @escaping () throws -> ACPClient, preparePrompt: @escaping (String) -> String = { $0 },
-                displayReply: @escaping (String) -> String = { $0 }) {
+                displayReply: @escaping (String) -> String = { $0 }, missingModelsMessage: String? = nil) {
         self.makeClient = makeClient
         self.preparePrompt = preparePrompt
         self.displayReply = displayReply
+        self.missingModelsMessage = missingModelsMessage
+    }
+
+    public var canSend: Bool {
+        phase == .ready && modelProblem == nil && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    fileprivate var needsModelCatalog: Bool { missingModelsMessage != nil && models?.choices.isEmpty != false }
+
+    fileprivate var modelProblem: String? {
+        if needsModelCatalog { return missingModelsMessage }
+        return missingModelsMessage != nil && models?.current.isEmpty == true ? "Choose a model before sending." : nil
     }
 
     public func connect() {
@@ -70,9 +84,8 @@ import SwiftUI
     }
 
     public func send() {
-        guard phase == .ready, let client else { return }
+        guard canSend, let client else { return }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
         let prompt = preparePrompt(text)
         guard prompt.utf8.count <= ACPClient.maxPromptBytes else {
             error = ACPError.promptTooLarge.localizedDescription
@@ -124,6 +137,20 @@ import SwiftUI
     /// Dismiss the connection without sending or retaining any more chat data.
     public func disconnect() {
         if let client = reset() { Task { await client.close() } }
+    }
+
+    fileprivate func reconnect() {
+        let message = draft
+        let previous = reset()
+        draft = message
+        let serial = generation
+        phase = .connecting
+        Task {
+            await previous?.close()
+            guard generation == serial else { return }
+            phase = .disconnected
+            connect()
+        }
     }
 
     public func shutdown() async {
@@ -198,7 +225,7 @@ public struct AgentChatView: View {
             } else {
                 transcript
             }
-            if let error = session.error {
+            if let error = session.error ?? (session.phase == .ready ? session.modelProblem : nil) {
                 Label(error, systemImage: "exclamationmark.circle").font(.callout)
                     .padding(.horizontal, 16).padding(.bottom, 10)
             }
@@ -220,7 +247,7 @@ public struct AgentChatView: View {
                 Spacer(minLength: 4)
                 if let models = session.models, !models.choices.isEmpty {
                     modelMenu(models)
-                } else if session.phase == .ready {
+                } else if session.phase == .ready, session.modelProblem == nil {
                     Text("CLI default model").font(.caption).foregroundStyle(Color(nsColor: palette.secondary))
                 }
             }
@@ -228,7 +255,8 @@ public struct AgentChatView: View {
     }
 
     private func modelMenu(_ models: ACPModels) -> some View {
-        let current = models.choices.first { $0.id == models.current }?.name ?? models.current
+        let current = models.choices.first { $0.id == models.current }?.name
+            ?? (models.current.isEmpty ? "Choose model" : models.current)
         return Menu {
             ForEach(models.choices) { choice in
                 Button { session.selectModel(choice.id) } label: {
@@ -284,9 +312,13 @@ public struct AgentChatView: View {
                     ProgressView().controlSize(.small)
                     Text("Switching model…").font(.callout)
                 case .ready:
-                    Button("Send") { session.send() }.keyboardShortcut(.return, modifiers: .command)
-                        .buttonStyle(QuietButtonStyle(palette: palette, prominent: true))
-                        .disabled(session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if session.needsModelCatalog {
+                        Button("Reconnect") { session.reconnect() }
+                            .buttonStyle(QuietButtonStyle(palette: palette, prominent: true))
+                    } else {
+                        Button("Send") { session.send() }.keyboardShortcut(.return, modifiers: .command)
+                            .buttonStyle(QuietButtonStyle(palette: palette, prominent: true)).disabled(!session.canSend)
+                    }
                 case .replying, .stopping:
                     Button(session.phase == .stopping ? "Stopping…" : "Stop") { session.stop() }
                         .buttonStyle(QuietButtonStyle(palette: palette)).disabled(session.phase == .stopping)

@@ -406,6 +406,8 @@ AgentChatView(session: chat, title: "Chat", agent: "Local agent",
 
 `ACPClient` takes an executable, arguments, working directory, optional environment and client name. It starts an ACP v1 JSON-RPC session, handles text chunks, model options, and cancellation. The agent must already be authenticated; the chat does not handle credentials. Call `disconnect()` when the window closes and `await shutdown()` before quitting. `lastReply` only exposes a complete reply, not interrupted or truncated text. Validate it before deriving app-specific actions, and never execute it as code.
 
+Set `missingModelsMessage` on `AgentChatSession` if the agent requires a model catalog. Sending is blocked until the catalog is available and a model is selected. Reconnecting keeps the unsent draft and starts a new conversation.
+
 The transport does not advertise filesystem or terminal capabilities or attach MCP servers. It rejects client-side tool callbacks. This does **not** prevent the agent's own tools from using its process privileges. The caller is responsible for the executable, process confinement, permissions and environment. If you cannot establish the expected boundary, do not launch an unrestricted process.
 
 ---
