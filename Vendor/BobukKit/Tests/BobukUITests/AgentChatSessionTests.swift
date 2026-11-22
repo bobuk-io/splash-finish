@@ -107,14 +107,17 @@ import Testing
         let (defaults, suite) = IsolatedDefaults.make()
         defer { IsolatedDefaults.remove(suite) }
         let prefs = AgentChatPreferences(defaults: defaults, defaultAgent: .antigravity)
+        #expect(prefs.sandboxed == true)
         prefs.agent = .kimi
         prefs.model = "kimi-k3"
         prefs.effort = "high"
+        prefs.sandboxed = false
 
         let reloaded = AgentChatPreferences(defaults: defaults, defaultAgent: .antigravity)
         #expect(reloaded.agent == .kimi)
         #expect(reloaded.model == "kimi-k3")
         #expect(reloaded.effort == "high")
+        #expect(reloaded.sandboxed == false)
     }
     @Test(arguments: [true, false]) func modelCatalogRequirement(_ required: Bool) async throws {
         let dir = try TemporaryDirectory(prefix: "acp-no-models")

@@ -162,6 +162,38 @@ import BobukUpdates
     print(output.path)
 }
 
+@MainActor func renderAgentSettings(preset: ThemePreset, dark: Bool, output: URL) throws {
+    let suite = UserDefaults(suiteName: "bobukkit-gallery-agent-settings-\(UUID().uuidString)")!
+    let store = ThemeStore(defaults: suite, defaultAppearance: dark ? .dark : .light,
+                           defaultPreset: preset, appliesToApplication: false)
+    let prefs = AgentChatPreferences(defaults: suite, defaultAgent: .antigravity)
+    prefs.model = "gemini-4-neon"
+    prefs.effort = "medium"
+    let window = ChromeWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 270), theme: store,
+                              resizable: false, showsTitle: true)
+    window.title = "AI Agent"
+    window.setContent(
+        VStack(alignment: .leading, spacing: 14) {
+            ThemedSection("AI Agent", tokens: store.tokens) {
+                AgentSettingsSection(preferences: prefs, tokens: store.tokens, autoProbe: false)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .themedSurface(store)
+    )
+    guard let view = window.contentView else { return }
+    view.layoutSubtreeIfNeeded()
+    view.displayIfNeeded()
+    guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw CocoaError(.fileWriteUnknown) }
+    view.cacheDisplay(in: view.bounds, to: bitmap)
+    guard let data = bitmap.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
+    try data.write(to: output)
+    window.close()
+    print(output.path)
+}
+
 let output = URL(fileURLWithPath: CommandLine.arguments.dropFirst().first ?? "/tmp/bobukkit-gallery", isDirectory: true)
 try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
 try MainActor.assumeIsolated {
@@ -181,5 +213,6 @@ try MainActor.assumeIsolated {
     if let sage = ThemePreset.named("sage") {
         try renderChat(preset: sage, dark: false, output: output.appendingPathComponent("chat-light.png"))
         try renderChat(preset: sage, dark: true, output: output.appendingPathComponent("chat-dark.png"))
+        try renderAgentSettings(preset: sage, dark: false, output: output.appendingPathComponent("agent-settings-light.png"))
     }
 }

@@ -325,5 +325,17 @@ import Testing
         #expect(response.stopReason == "end_turn")
         #expect(response.model == "m-smart")
         #expect(response.effort == "high")
+
+        // Also verify probeCapabilities reads models & efforts cleanly and closes the subprocess.
+        let probed = try await ACPAgentPreset.codex.probeCapabilities(
+            sandboxed: false,
+            clientName: "test-probe",
+            home: dir.url,
+            environment: ["BOBUK_ACP_CODEX_PATH": fakeAgent.path, "PATH": "/usr/bin:/bin"]
+        )
+        #expect(probed.models?.current == "m-fast")
+        #expect(probed.models?.choices.count == 2)
+        #expect(probed.efforts?.current == "medium")
+        #expect(probed.efforts?.choices.map(\.id) == ["low", "medium", "high"])
     }
 }

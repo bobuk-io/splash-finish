@@ -794,6 +794,40 @@ public struct ACPAgentPreset: Codable, Equatable, Hashable, Identifiable, Sendab
         )
     }
 
+    /// Briefly connects to this agent in a temporary folder to read its available ACP models and
+    /// reasoning effort options, then closes the subprocess immediately.
+    public func probeCapabilities(
+        sandboxed: Bool = true,
+        clientName: String = "bobuk-probe",
+        requestTimeout: Duration = .seconds(15),
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) async throws -> (models: ACPModels?, efforts: ACPModels?) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bobuk-acp-probe-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let config = try launch(
+            in: dir,
+            sandboxed: sandboxed,
+            access: .textOnly,
+            clientName: clientName,
+            home: home,
+            environment: environment
+        )
+        let client = ACPClient(launch: config, requestTimeout: requestTimeout, turnTimeout: requestTimeout)
+        do {
+            let models = try await client.connect()
+            let efforts = await client.effortOptions()
+            await client.close()
+            return (models, efforts)
+        } catch {
+            await client.close()
+            throw error
+        }
+    }
+
     /// Runs a single headless prompt against this agent and returns the full response.
     /// No UI is required; the subprocess is always terminated before returning.
     public func ask(

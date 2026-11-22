@@ -45,7 +45,14 @@ import UniformTypeIdentifiers
     }
     /// Called after the agent subprocess is closed due to `idleTimeout`.
     @ObservationIgnored public var onIdleDisconnect: (() -> Void)?
+    /// Incremented by `requestComposerFocus()` so `AgentChatView` focuses the input field immediately.
+    public private(set) var focusRequestID = 0
     public var draft = ""
+
+    /// Requests keyboard focus on the composer text field in any attached `AgentChatView`.
+    public func requestComposerFocus() {
+        focusRequestID += 1
+    }
 
     private var client: ACPClient?
     @ObservationIgnored private var replyTask: Task<Void, Never>?
@@ -726,6 +733,7 @@ private struct ChatColors {
 public struct AgentChatView: View {
     @Bindable private var session: AgentChatSession
     @FocusState private var composerFocused: Bool
+    @State private var hostWindow = WindowReference()
     @State private var copiedMessageID: UUID?
     @State private var hoveredMessageID: UUID?
     @State private var expandedActivityIDs: Set<UUID> = []
@@ -878,8 +886,19 @@ public struct AgentChatView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(colors.panel)
         .foregroundStyle(colors.ink)
+        .windowReference(hostWindow)
         .onAppear {
             refreshAgentStatuses()
+            if hostWindow.window?.isVisible != false {
+                focusComposer()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
+            guard let win = note.object as? NSWindow, win === hostWindow.window else { return }
+            focusComposer()
+        }
+        .onChange(of: session.focusRequestID) { _, _ in
+            focusComposer(force: true)
         }
         .onChange(of: selectedAgent?.wrappedValue) { _, _ in
             adapterInstallError = nil
@@ -887,10 +906,29 @@ public struct AgentChatView: View {
             refreshAgentStatuses()
         }
         .onChange(of: session.phase) { _, new in
-            if new == .ready { composerFocused = true }
+            if new == .ready { focusComposer() }
         }
         .onChange(of: session.draft) { _, _ in
             session.noteActivity()
+        }
+    }
+
+    private func focusComposer(force: Bool = false) {
+        if let win = hostWindow.window {
+            guard win.isVisible else { return }
+            if !force, win.firstResponder is NSTextView { return }
+        }
+        // Reset first when @FocusState is already true while AppKit's firstResponder moved elsewhere
+        // (e.g. after orderOut / makeKeyAndOrderFront), otherwise setting `true` again is a no-op.
+        if composerFocused {
+            composerFocused = false
+        }
+        DispatchQueue.main.async {
+            if let win = hostWindow.window {
+                guard win.isVisible else { return }
+                if !force, win.firstResponder is NSTextView { return }
+            }
+            composerFocused = true
         }
     }
 

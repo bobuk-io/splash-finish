@@ -91,6 +91,7 @@ import SwiftUI
             controller = hosted
         }
         controller?.show()
+        session.requestComposerFocus()
     }
 
     public func close() {

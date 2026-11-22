@@ -634,6 +634,7 @@ For UI sessions (`AgentChatSession`), pass `initialModel:` and `initialEffort:` 
 
 ### Rules & security boundary
 
+- **Agent / Model / Effort picker:** embed `AgentSettingsSection(preferences:tokens:)` inside a `ThemedSection("AI Agent", tokens:)` in Settings, or open a standalone picker window via `AgentSettingsWindowController(preferences:theme:)`. It auto-detects installed agents, installs missing ACP adapters, probes live models & effort levels via `ACPAgentPreset.probeCapabilities(...)`, and persists selections in `AgentChatPreferences`.
 - **Turnkey window & persistence:** use `AgentChatWindowController` (wraps `ChromeWindow` + `HostedWindowController` + `+` New Chat strip button + `ShortcutFooter`) and `AgentChatPreferences` (persists selected agent, model, and effort in `UserDefaults`).
 - **Built-in chat UX:** auto-connects on `⌘↩` from disconnected/idle state, collapsible tool/thought activity disclosure, jump-to-bottom (`↓`) pill when scrolled up, drag-and-drop files or paste images (`ACPAttachment`), `Regenerate` on the last reply, and `↑`/`↓` prompt history recall.
 - **Markdown & raw copy:** `AgentChatView` renders Markdown (headings, lists, tables, horizontal rules, blockquotes, inline styles, and fenced code blocks with a per-block Copy button). Every message supports text selection, hover **Copy Markdown**, right-click **Copy Markdown**, and **double-click** to copy the exact raw Markdown as plain text (`NSPasteboard.PasteboardType.string`, never RTF).

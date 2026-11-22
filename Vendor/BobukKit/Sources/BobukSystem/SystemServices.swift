@@ -54,8 +54,16 @@ public enum AccessibilityPermission {
 @MainActor
 public enum AppActivation {
     /// Brings the app (usually an `LSUIElement` accessory) to the front before showing a window.
-    /// Uses `NSApp.activate()`, never the deprecated `activate(ignoringOtherApps:)`.
-    public static func activate() { NSApp.activate() }
+    /// Calls cooperative `NSApp.activate()` first, then falls back to forceful activation when the
+    /// accessory app was triggered from a global hotkey or non-activating panel while another app is frontmost.
+    public static func activate() {
+        NSApp.activate()
+        if !NSApp.isActive {
+            // `NSApplication.ActivationOptions.activateIgnoringOtherApps` (bit 1) remains the
+            // working mechanism on macOS 14+ for LSUIElement apps triggered outside cooperative yield.
+            _ = NSRunningApplication.current.activate(options: NSApplication.ActivationOptions(rawValue: 1 << 1))
+        }
+    }
 
     /// `.accessory`: no Dock icon and no menu bar while a window is open.
     public static func becomeAccessory() { NSApp.setActivationPolicy(.accessory) }

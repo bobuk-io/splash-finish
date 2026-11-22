@@ -8,15 +8,18 @@ import Observation
         public var agentID: String
         public var model: String
         public var effort: String
+        public var sandboxed: String
 
         public init(
             agentID: String = "acpChatAgentID",
             model: String = "acpChatModel",
-            effort: String = "acpChatEffort"
+            effort: String = "acpChatEffort",
+            sandboxed: String = "acpChatSandboxed"
         ) {
             self.agentID = agentID
             self.model = model
             self.effort = effort
+            self.sandboxed = sandboxed
         }
     }
 
@@ -47,6 +50,12 @@ import Observation
         }
     }
 
+    public var sandboxed: Bool {
+        didSet {
+            defaults.set(sandboxed, forKey: keys.sandboxed)
+        }
+    }
+
     public init(
         defaults: UserDefaults = .standard,
         keys: StorageKeys = StorageKeys(),
@@ -65,6 +74,11 @@ import Observation
         self.agent = resolvedAgent
         self.model = defaults.string(forKey: keys.model)
         self.effort = defaults.string(forKey: keys.effort)
+        if defaults.object(forKey: keys.sandboxed) != nil {
+            self.sandboxed = defaults.bool(forKey: keys.sandboxed)
+        } else {
+            self.sandboxed = true
+        }
     }
 
     /// Synchronizes current model and effort from an active `AgentChatSession`.
