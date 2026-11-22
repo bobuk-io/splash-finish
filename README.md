@@ -217,6 +217,7 @@ bash Scripts/release/test_kit.sh    # offline release kit checks (publication or
 python3 -m unittest discover -s Tests -v
 node Tests/pi-extension.test.mjs       # Node 22.18+ for TypeScript stripping
 node Tests/pi-questions.test.mjs
+node Tests/omp-extension.test.mjs
 Scripts/run.sh                         # ad-hoc local build in build/, started like the other bobuk-io apps
 # With an active macOS desktop and no existing Splash Finish process:
 SPLASH_FINISH_GUI_TESTS=1 python3 -m unittest discover -s Tests -p test_app_smoke.py -v

@@ -196,6 +196,18 @@ final class EventTests: XCTestCase {
             XCTAssertThrowsError(try DeepLink.parse(URL(string: raw)!))
         }
     }
+    func testAgtermSourceURLAllowedAndRoundTrips() throws {
+        let link = "agterm://session/123e4567-e89b-12d3-a456-426614174000"
+        XCTAssertTrue(AgentEvent.isSafeSourceURL(link))
+        XCTAssertTrue(AgentEvent.isSafeSourceURL("AGTERM://session/123e4567-e89b-12d3-a456-426614174000"))
+        XCTAssertFalse(AgentEvent.isSafeSourceURL("file:///tmp/script.sh"))
+        XCTAssertFalse(AgentEvent.isSafeSourceURL("javascript:alert(1)"))
+
+        let event = try AgentEvent(task: "agterm-task", agent: "Codex", status: .done, title: "Done",
+                                   source: EventSource(url: link)).validated()
+        let parsed = try DeepLink.parse(DeepLink.eventURL(event))
+        XCTAssertEqual(parsed.source?.url, link)
+    }
     func testTruncationAndControlCharacters() throws {
         let event = try AgentEvent(task: "task", agent: "Codex", status: .done,
                                    title: "hello\u{1B}\nworld\t" + String(repeating: "x", count: 5000)).validated()
