@@ -1,4 +1,5 @@
 import AppKit
+import BobukCore
 import SwiftUI
 import Testing
 @testable import BobukUI
@@ -62,6 +63,27 @@ struct PickerSelectionTests {
                                                                         palette: palette, onSettings: {}).frame(width: 300))
         #expect(footerWithSettings.fittingSize.height >= 22)
     }
+
+    @Test func pickerSurfaceSkipsRedrawWhenPaletteIsUnchanged() throws {
+        _ = NSApplication.shared
+        let config = ThemePaletteConfig(preset: .amber)
+        let paletteA = config.tokens(dark: true).pickerPalette()
+        let paletteB = config.tokens(dark: true).pickerPalette()
+        let paletteC = config.tokens(dark: false).pickerPalette()
+        #expect(paletteA == paletteB)
+        #expect(paletteA != paletteC)
+        let surface = PickerSurfaceView(palette: paletteA)
+        surface.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
+        let layer = try #require(surface.layer)
+        layer.displayIfNeeded()
+        #expect(!layer.needsDisplay())
+        surface.palette = paletteB
+        #expect(!layer.needsDisplay())
+        surface.accentProgress = nil
+        #expect(!layer.needsDisplay())
+        surface.palette = paletteC
+        #expect(layer.needsDisplay())
+    }
 }
 
 struct FuzzyHighlightTests {
@@ -71,6 +93,14 @@ struct FuzzyHighlightTests {
         #expect(runs.map(\.0) == ["1P", "ass", "w", "or", "d"])
         #expect(runs.map(\.1) == [true, false, true, false, true])
         #expect(text.runs.first?.foregroundColor == .orange)
+    }
+
+    @Test func preparedQueryMatchesStringOverloadAndHandlesEmptyQuery() {
+        let prepared = FuzzyQuery("1pwd")
+        #expect(AttributedString.highlighting("1Password", query: prepared, color: .orange)
+                == AttributedString.highlighting("1Password", query: "1pwd", color: .orange))
+        let plain = AttributedString.highlighting("Safari", query: FuzzyQuery(""), color: .orange)
+        #expect(plain == AttributedString("Safari"))
     }
 
     @Test func fallbackMatchIsHighlighted() {

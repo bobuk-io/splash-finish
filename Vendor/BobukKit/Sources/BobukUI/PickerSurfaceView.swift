@@ -2,9 +2,13 @@ import AppKit
 
 /// The shared panel frame for AppKit and SwiftUI. No window/focus policy lives here.
 @MainActor public final class PickerSurfaceView: NSView {
-    public var palette: PickerPalette { didSet { needsDisplay = true } }
+    public var palette: PickerPalette {
+        didSet { if palette != oldValue { needsDisplay = true } }
+    }
     /// 0...1 turns the accent rule into a loading bar; nil draws the solid rule.
-    public var accentProgress: Double? { didSet { needsDisplay = true } }
+    public var accentProgress: Double? {
+        didSet { if accentProgress != oldValue { needsDisplay = true } }
+    }
     public override var isFlipped: Bool { true }
 
     public init(palette: PickerPalette) {

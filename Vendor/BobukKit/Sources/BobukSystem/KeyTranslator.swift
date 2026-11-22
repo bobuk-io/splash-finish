@@ -14,6 +14,33 @@ public enum KeyTranslator {
 
     private static var latinCodes: (layoutID: String, codes: [String: UInt16])?
     private static var hints: (key: String, hints: [String: String])?
+    private static var cachedASCIILayout: Layout?
+    private static var cachedCurrentLayout: Layout?
+    private static var hasCachedASCII = false
+    private static var hasCachedCurrent = false
+    private static var observersInstalled = false
+
+    private static func installObserversIfNeeded() {
+        guard !observersInstalled else { return }
+        observersInstalled = true
+        let reset: @Sendable (Notification) -> Void = { _ in
+            MainActor.assumeIsolated { invalidateCache() }
+        }
+        DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
+            object: nil, queue: .main, using: reset)
+        NotificationCenter.default.addObserver(
+            forName: NSTextInputContext.keyboardSelectionDidChangeNotification,
+            object: nil, queue: .main, using: reset)
+    }
+
+    /// Drops the cached Carbon keyboard layouts (called automatically when the input source changes).
+    public static func invalidateCache() {
+        cachedASCIILayout = nil
+        cachedCurrentLayout = nil
+        hasCachedASCII = false
+        hasCachedCurrent = false
+    }
 
     private static func layout(_ source: TISInputSource?) -> Layout? {
         guard let source,
@@ -25,11 +52,21 @@ public enum KeyTranslator {
     }
 
     private static var asciiLayout: Layout? {
-        layout(TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue())
+        installObserversIfNeeded()
+        if !hasCachedASCII {
+            cachedASCIILayout = layout(TISCopyCurrentASCIICapableKeyboardLayoutInputSource()?.takeRetainedValue())
+            hasCachedASCII = true
+        }
+        return cachedASCIILayout
     }
 
     private static var currentLayout: Layout? {
-        layout(TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue())
+        installObserversIfNeeded()
+        if !hasCachedCurrent {
+            cachedCurrentLayout = layout(TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue())
+            hasCachedCurrent = true
+        }
+        return cachedCurrentLayout
     }
 
     private static func translate(_ keyCode: UInt16, data: Data) -> String? {

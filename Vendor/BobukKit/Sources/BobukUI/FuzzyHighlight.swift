@@ -6,6 +6,7 @@ public extension AttributedString {
     /// bold and, when given, in `color`. Use it as `Text(AttributedString.highlighting(...))`;
     /// the row keeps its own font.
     static func highlighting(_ text: String, positions: [Int], color: Color? = nil) -> AttributedString {
+        guard !positions.isEmpty else { return AttributedString(text) }
         let marked = Set(positions)
         var result = AttributedString()
         var run = ""
@@ -29,11 +30,18 @@ public extension AttributedString {
         return result
     }
 
+    /// `text` with the letters that a prepared `FuzzyQuery` matched highlighted (also by the
+    /// fallback pass of a 3-letter query); plain when the query is empty or nothing matched.
+    static func highlighting(_ text: String, query: FuzzyQuery, color: Color? = nil) -> AttributedString {
+        guard !query.isEmpty else { return AttributedString(text) }
+        let match = query.match(text) ?? (query.hasFallback ? query.match(text, fallback: true) : nil)
+        return highlighting(text, positions: match?.positions ?? [], color: color)
+    }
+
     /// `text` with the letters that `query` matched highlighted (also by the fallback pass of a
     /// 3-letter query); plain when nothing matched.
     static func highlighting(_ text: String, query: String, color: Color? = nil) -> AttributedString {
-        let prepared = FuzzyQuery(query)
-        let match = prepared.match(text) ?? prepared.match(text, fallback: true)
-        return highlighting(text, positions: match?.positions ?? [], color: color)
+        guard !query.isEmpty else { return AttributedString(text) }
+        return highlighting(text, query: FuzzyQuery(query), color: color)
     }
 }

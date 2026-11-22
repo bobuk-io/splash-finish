@@ -1,7 +1,7 @@
 import AppKit
 
 /// Apps own their palette, including per-window appearance. The kit owns geometry.
-public struct PickerPalette {
+public struct PickerPalette: Equatable {
     public var surface: NSColor
     public var text: NSColor
     public var secondary: NSColor

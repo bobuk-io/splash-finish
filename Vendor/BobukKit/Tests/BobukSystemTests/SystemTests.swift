@@ -92,3 +92,14 @@ import Testing
         #expect(changes == [true, false])
     }
 }
+
+@MainActor @Suite struct KeyTranslatorCacheTests {
+    @Test func cachedTranslationMatchesAfterInvalidation() {
+        let first = KeyTranslator.latin(0)
+        let second = KeyTranslator.latin(0)
+        #expect(first == second)
+        KeyTranslator.invalidateCache()
+        let third = KeyTranslator.latin(0)
+        #expect(first == third)
+    }
+}
