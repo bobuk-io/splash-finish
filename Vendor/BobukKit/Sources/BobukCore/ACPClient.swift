@@ -1,20 +1,31 @@
 import Darwin
 import Foundation
 
+/// Process-level isolation, independent of the client-side ACP permission policy.
+public enum ACPProcessIsolation: Sendable {
+    /// The launcher receives its own arguments, then the agent executable and its arguments.
+    /// The caller supplies a trusted launcher and a policy appropriate for the app.
+    case sandboxed(launcher: URL, arguments: [String])
+    /// Start the agent directly, with the application's OS privileges.
+    case unrestricted
+}
+
 public struct ACPLaunchConfiguration: Sendable {
     public let executable: URL
     public let arguments: [String]
     public let directory: URL
     public let environment: [String: String]?
     public let clientName: String
+    public let isolation: ACPProcessIsolation
 
     public init(executable: URL, arguments: [String], directory: URL,
-                environment: [String: String]? = nil, clientName: String) {
+                environment: [String: String]? = nil, clientName: String, isolation: ACPProcessIsolation) {
         self.executable = executable
         self.arguments = arguments
         self.directory = directory
         self.environment = environment
         self.clientName = clientName
+        self.isolation = isolation
     }
 }
 
@@ -65,7 +76,7 @@ public enum ACPError: LocalizedError, Equatable, Sendable {
 }
 
 /// Minimal ACP v1 text client. Never provides filesystem, terminal, or MCP capabilities.
-/// The caller must isolate the subprocess: declining ACP callbacks is not a sandbox.
+/// Declining ACP callbacks is not a sandbox. The caller chooses explicit process isolation.
 public actor ACPClient {
     public static let maxPromptBytes = 8_192
     private static let maxFrameBytes = 1_048_576
@@ -168,8 +179,14 @@ public actor ACPClient {
         let child = Process()
         let stdin = Pipe()
         let stdout = Pipe()
-        child.executableURL = launch.executable
-        child.arguments = launch.arguments
+        switch launch.isolation {
+        case let .sandboxed(launcher, arguments):
+            child.executableURL = launcher
+            child.arguments = arguments + [launch.executable.path] + launch.arguments
+        case .unrestricted:
+            child.executableURL = launch.executable
+            child.arguments = launch.arguments
+        }
         child.currentDirectoryURL = launch.directory
         child.environment = launch.environment
         child.standardInput = stdin

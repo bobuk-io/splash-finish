@@ -17,7 +17,8 @@ import Testing
             """#
         let chat = AgentChatSession(makeClient: {
             ACPClient(launch: .init(executable: URL(fileURLWithPath: "/bin/bash"), arguments: ["-c", agent],
-                                   directory: dir.url, environment: ["PATH": "/usr/bin:/bin"], clientName: "test"),
+                                   directory: dir.url, environment: ["PATH": "/usr/bin:/bin"], clientName: "test",
+                                   isolation: .unrestricted),
                       requestTimeout: .seconds(2))
         }, missingModelsMessage: required ? "No models" : nil)
         chat.draft = "Keep my draft"

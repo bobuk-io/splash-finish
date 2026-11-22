@@ -61,10 +61,25 @@ import Testing
     IFS= read -r line || true
     """#
 
-    private func fixture(_ mode: String, directory: TemporaryDirectory, timeout: Duration = .seconds(2)) -> ACPClient {
+    private func fixture(_ mode: String, directory: TemporaryDirectory, timeout: Duration = .seconds(2),
+                         isolation: ACPProcessIsolation = .unrestricted) -> ACPClient {
         ACPClient(launch: ACPLaunchConfiguration(executable: URL(fileURLWithPath: "/bin/bash"),
                   arguments: ["-c", Self.script, "fixture", mode], directory: directory.url,
-                  environment: ["PATH": "/usr/bin:/bin"], clientName: "fixture"), requestTimeout: timeout, turnTimeout: .seconds(2))
+                  environment: ["PATH": "/usr/bin:/bin"], clientName: "fixture", isolation: isolation),
+                  requestTimeout: timeout, turnTimeout: .seconds(2))
+    }
+
+    @Test func launchesThroughSandboxAndDoesNotFallBack() async throws {
+        let dir = try TemporaryDirectory(prefix: "acp-launch-mode")
+        defer { dir.remove() }
+        let sandbox = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
+        let wrapped = fixture("normal", directory: dir,
+                              isolation: .sandboxed(launcher: sandbox, arguments: ["-p", "(version 1)(allow default)"]))
+        #expect(try await wrapped.connect()?.current == "fast")
+        await wrapped.close()
+        let denied = fixture("normal", directory: dir,
+                              isolation: .sandboxed(launcher: URL(fileURLWithPath: "/usr/bin/false"), arguments: []))
+        await #expect(throws: ACPError.disconnected) { _ = try await denied.connect() }
     }
 
     @Test func modelSelectionAndStreamRejectingCallbacks() async throws {
