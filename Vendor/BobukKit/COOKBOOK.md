@@ -400,8 +400,11 @@ if let dir = ProcessInfo.processInfo.environment["BOBUKKIT_PREVIEW_DIR"] {
 let chat = AgentChatSession(makeClient: {
     ACPClient(launch: try appScopedAgentLaunch())
 }, preparePrompt: appPrompt)
-AgentChatView(session: chat, title: "Chat", agent: "Local agent",
-              intro: "Describe what you want to do.", palette: theme.pickerPalette)
+AgentChatView(session: chat, agent: "Local agent",
+              intro: "Text-only session without file access.",
+              starters: ["Draft a rule…"],
+              sandboxed: $sandboxed,
+              tokens: theme.tokens)
 ```
 
 `ACPClient` takes an executable, arguments, working directory, optional environment, client name, and explicit `ACPProcessIsolation`. Use `.sandboxed(launcher:arguments:)` for a trusted sandbox launcher and its app-specific policy; the kit appends the agent executable and its arguments. `.unrestricted` starts the agent directly with the caller's OS privileges. Select that mode only with informed user opt-in. A sandbox launch failure never falls back to direct launch. It starts an ACP v1 JSON-RPC session, handles text chunks, model options, and cancellation. The agent must already be authenticated; the chat does not handle credentials. Call `disconnect()` when the window closes and `await shutdown()` before quitting. `lastReply` only exposes a complete reply, not interrupted or truncated text. Validate it before deriving app-specific actions, and never execute it as code.

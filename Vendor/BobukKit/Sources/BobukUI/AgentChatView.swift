@@ -196,134 +196,519 @@ import SwiftUI
     }
 }
 
+private struct ChatColors {
+    let panel: Color
+    let elevated: Color
+    let field: Color
+    let ink: Color
+    let muted: Color
+    let accent: Color
+    let accentSurface: Color
+    let keyInk: Color
+    let line: Color
+    let stroke: Color
+    let success: Color
+    let danger: Color
+    let isDark: Bool
+    let palette: PickerPalette
+
+    init(tokens: ThemeTokens) {
+        panel = tokens.panelColor
+        elevated = tokens.elevatedColor
+        field = tokens.fieldColor
+        ink = tokens.inkColor
+        muted = tokens.mutedColor
+        accent = tokens.accentColor
+        accentSurface = tokens.accentSurfaceColor
+        keyInk = tokens.keyInkColor
+        line = tokens.lineColor
+        stroke = tokens.strokeColor
+        success = tokens.successColor
+        danger = tokens.dangerColor
+        isDark = tokens.isDark
+        palette = tokens.pickerPalette()
+    }
+
+    init(palette: PickerPalette) {
+        let surface = Color(nsColor: palette.surface)
+        let accent = Color(nsColor: palette.accent)
+        let border = Color(nsColor: palette.border)
+        panel = surface
+        elevated = border.opacity(0.18)
+        field = surface
+        ink = Color(nsColor: palette.text)
+        muted = Color(nsColor: palette.secondary)
+        self.accent = accent
+        accentSurface = accent.opacity(0.12)
+        keyInk = Color(nsColor: palette.badgeInk)
+        line = border.opacity(0.55)
+        stroke = border
+        success = Color(nsColor: .systemGreen)
+        danger = Color(nsColor: .systemRed)
+        isDark = false
+        self.palette = palette
+    }
+}
+
+/// Minimalist, editorial text-only chat surface backed by `AgentChatSession`.
 public struct AgentChatView: View {
     @Bindable private var session: AgentChatSession
     @FocusState private var composerFocused: Bool
-    private let title: String
+    private let emptyTitle: String
     private let agent: String
     private let intro: String
-    private let palette: PickerPalette
+    private let placeholder: String
+    private let starters: [String]
+    private let sandboxed: Binding<Bool>?
+    private let colors: ChatColors
 
-    public init(session: AgentChatSession, title: String, agent: String, intro: String, palette: PickerPalette) {
+    public init(
+        session: AgentChatSession,
+        agent: String,
+        intro: String,
+        emptyTitle: String = "How can I help?",
+        placeholder: String = "Message…",
+        starters: [String] = [],
+        sandboxed: Binding<Bool>? = nil,
+        tokens: ThemeTokens
+    ) {
         self.session = session
-        self.title = title
         self.agent = agent
         self.intro = intro
-        self.palette = palette
+        self.emptyTitle = emptyTitle
+        self.placeholder = placeholder
+        self.starters = starters
+        self.sandboxed = sandboxed
+        self.colors = ChatColors(tokens: tokens)
     }
 
+    public init(
+        session: AgentChatSession,
+        title: String,
+        agent: String,
+        intro: String,
+        starters: [String] = [],
+        sandboxed: Binding<Bool>? = nil,
+        palette: PickerPalette
+    ) {
+        self.session = session
+        self.agent = agent
+        self.intro = intro
+        self.emptyTitle = title
+        self.placeholder = "Message…"
+        self.starters = starters
+        self.sandboxed = sandboxed
+        self.colors = ChatColors(palette: palette)
+    }
+
+    private var isStreaming: Bool { session.phase == .replying || session.phase == .stopping }
+    private var activeError: String? { session.error ?? (session.phase == .ready ? session.modelProblem : nil) }
+
     public var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header.padding(16)
-            Divider()
+        VStack(spacing: 0) {
             if session.messages.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Image(systemName: "bubble.left.and.text.bubble.right").font(.title2)
-                        .foregroundStyle(Color(nsColor: palette.accent)).accessibilityHidden(true)
-                    Text(intro).font(.callout).foregroundStyle(Color(nsColor: palette.secondary))
-                }.padding(16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                emptyCanvas
             } else {
                 transcript
             }
-            if let error = session.error ?? (session.phase == .ready ? session.modelProblem : nil) {
-                Label(error, systemImage: "exclamationmark.circle").font(.callout)
-                    .padding(.horizontal, 16).padding(.bottom, 10)
+
+            if let message = activeError {
+                recoveryBanner(message)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
             }
-            Divider()
-            composer.padding(16)
+
+            composer
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+                .padding(.top, 4)
         }
-        .background(Color(nsColor: palette.surface))
-        .foregroundStyle(Color(nsColor: palette.text))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(colors.panel)
+        .foregroundStyle(colors.ink)
         .onChange(of: session.phase) { _, new in
             if new == .ready { composerFocused = true }
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
-            HStack(spacing: 8) {
-                Label(agent, systemImage: "point.3.connected.trianglepath.dotted").font(.callout)
-                Spacer(minLength: 4)
-                if let models = session.models, !models.choices.isEmpty {
-                    modelMenu(models)
-                } else if session.phase == .ready, session.modelProblem == nil {
-                    Text("CLI default model").font(.caption).foregroundStyle(Color(nsColor: palette.secondary))
-                }
+    // MARK: - Empty state
+
+    private var emptyCanvas: some View {
+        VStack(spacing: 16) {
+            Spacer(minLength: 20)
+            VStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 18, weight: .light))
+                    .foregroundStyle(colors.accent)
+                    .frame(width: 36, height: 36)
+                    .background(colors.accentSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .accessibilityHidden(true)
+
+                Text(emptyTitle)
+                    .font(.system(size: 17, weight: .semibold))
+                    .tracking(-0.3)
+                    .accessibilityAddTraits(.isHeader)
+
+                Text(intro)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(colors.muted)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 320)
             }
+
+            if !starters.isEmpty {
+                VStack(spacing: 6) {
+                    ForEach(starters, id: \.self) { text in
+                        starterChip(text)
+                    }
+                }
+                .padding(.top, 4)
+            }
+
+            Spacer(minLength: 20)
         }
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func modelMenu(_ models: ACPModels) -> some View {
-        let current = models.choices.first { $0.id == models.current }?.name
-            ?? (models.current.isEmpty ? "Choose model" : models.current)
-        return Menu {
-            ForEach(models.choices) { choice in
-                Button { session.selectModel(choice.id) } label: {
-                    if choice.id == models.current { Label(choice.name, systemImage: "checkmark") }
-                    else { Text(choice.name) }
-                }
-            }
+    private func starterChip(_ text: String) -> some View {
+        Button {
+            session.draft = text
+            composerFocused = true
         } label: {
-            Text(current).font(.callout).lineLimit(1)
-                .foregroundStyle(Color(nsColor: palette.text))
+            HStack(spacing: 8) {
+                Text(text)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(colors.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(colors.muted)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, 12)
+            .frame(maxWidth: 340, minHeight: 32, maxHeight: 32)
+            .background(colors.elevated, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(colors.line, lineWidth: 1)
+            }
         }
-        .menuStyle(.borderlessButton).frame(maxWidth: 170, alignment: .trailing)
-        .accessibilityLabel("Model: \(current)").disabled(session.phase != .ready)
+        .buttonStyle(.plain)
     }
+
+    // MARK: - Editorial thread
 
     private var transcript: some View {
         ScrollViewReader { reader in
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 18) {
                     ForEach(session.messages) { message in
-                        VStack(alignment: .leading, spacing: 5) {
-                            MonoLabel(message.isUser ? "You" : agent)
-                                .foregroundStyle(Color(nsColor: palette.secondary))
-                            Text(message.text.isEmpty ? "Waiting for the agent…" : message.text)
-                                .font(.body).textSelection(.enabled)
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(10)
-                            .background(message.isUser ? Color(nsColor: palette.accent).opacity(0.10) : .clear,
-                                        in: RoundedRectangle(cornerRadius: 7))
+                        if message.isUser {
+                            userTurn(message)
+                        } else {
+                            assistantTurn(message, streaming: isStreaming && message.id == session.messages.last?.id)
+                        }
                     }
                     Color.clear.frame(height: 1).id("chat-end").accessibilityHidden(true)
-                }.padding(12)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 18)
+                .padding(.bottom, 12)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .onChange(of: session.messages.last?.text) { _, _ in reader.scrollTo("chat-end", anchor: .bottom) }
+            .onChange(of: session.messages.last?.text) { _, _ in
+                reader.scrollTo("chat-end", anchor: .bottom)
+            }
         }
     }
 
-    private var composer: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            TextField("Message", text: $session.draft, axis: .vertical)
-                .lineLimit(2...4).textFieldStyle(.roundedBorder)
-                .focused($composerFocused)
-            HStack {
-                Spacer()
-                switch session.phase {
-                case .disconnected:
-                    Button("Connect") { session.connect() }.buttonStyle(QuietButtonStyle(palette: palette, prominent: true))
-                case .connecting:
-                    ProgressView().controlSize(.small)
-                    Text("Connecting…").font(.callout)
-                    Button("Cancel") { session.disconnect() }.buttonStyle(QuietButtonStyle(palette: palette))
-                case .switching:
-                    ProgressView().controlSize(.small)
-                    Text("Switching model…").font(.callout)
-                case .ready:
-                    if session.needsModelCatalog {
-                        Button("Reconnect") { session.reconnect() }
-                            .buttonStyle(QuietButtonStyle(palette: palette, prominent: true))
-                    } else {
-                        Button("Send") { session.send() }.keyboardShortcut(.return, modifiers: .command)
-                            .buttonStyle(QuietButtonStyle(palette: palette, prominent: true)).disabled(!session.canSend)
-                    }
-                case .replying, .stopping:
-                    Button(session.phase == .stopping ? "Stopping…" : "Stop") { session.stop() }
-                        .buttonStyle(QuietButtonStyle(palette: palette)).disabled(session.phase == .stopping)
+    private func userTurn(_ message: AgentChatSession.Message) -> some View {
+        HStack(spacing: 0) {
+            Text(message.text)
+                .font(.system(size: 13.5))
+                .lineSpacing(3.5)
+                .foregroundStyle(colors.ink)
+                .textSelection(.enabled)
+                .padding(.horizontal, 13)
+                .padding(.vertical, 9)
+                .background(colors.elevated, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(colors.line, lineWidth: 1)
                 }
+            Spacer(minLength: 36)
+        }
+    }
+
+    private func assistantTurn(_ message: AgentChatSession.Message, streaming: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(message.text.isEmpty ? "…" : message.text)
+                .font(.system(size: 13.5))
+                .lineSpacing(4.5)
+                .foregroundStyle(colors.ink)
+                .textSelection(.enabled)
+
+            if streaming {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(colors.accent)
+                        .frame(width: 6, height: 6)
+                    MonoLabel(streamingStatus)
+                        .foregroundStyle(colors.muted)
+                }
+                .padding(.top, 2)
             }
+        }
+        .padding(.leading, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var streamingStatus: String {
+        if session.phase == .stopping { return "STOPPING" }
+        if let name = currentModelName { return "GENERATING · \(name.uppercased())" }
+        return "GENERATING"
+    }
+
+    // MARK: - Recovery banner
+
+    private func recoveryBanner(_ message: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(colors.danger)
+                .accessibilityHidden(true)
+            Text(message)
+                .font(.system(size: 12))
+                .foregroundStyle(colors.ink)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            if session.phase == .disconnected {
+                Button("Retry") { session.connect() }
+                    .buttonStyle(QuietButtonStyle(palette: colors.palette, height: 24))
+            } else if session.needsModelCatalog {
+                Button("Reconnect") { session.reconnect() }
+                    .buttonStyle(QuietButtonStyle(palette: colors.palette, height: 24))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(colors.danger.opacity(colors.isDark ? 0.14 : 0.08),
+                    in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(colors.danger.opacity(0.32), lineWidth: 1)
+        }
+    }
+
+    // MARK: - Unified floating composer
+
+    private var composer: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField(isStreaming ? "Waiting for reply…" : placeholder, text: $session.draft, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13.5))
+                .lineLimit(1...5)
+                .focused($composerFocused)
+                .frame(maxWidth: .infinity, minHeight: 22, alignment: .topLeading)
+
+            HStack(spacing: 8) {
+                agentModelControl
+
+                if let sandboxed {
+                    sandboxControl(sandboxed)
+                }
+
+                Spacer(minLength: 4)
+
+                composerAction
+            }
+        }
+        .padding(.horizontal, 13)
+        .padding(.top, 11)
+        .padding(.bottom, 9)
+        .background(colors.field, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(session.canSend ? colors.accent.opacity(0.55) : colors.stroke, lineWidth: 1)
+        }
+    }
+
+    @ViewBuilder private var agentModelControl: some View {
+        if session.phase == .disconnected || session.phase == .connecting {
+            agentPillLabel(showChevron: false)
+        } else {
+            Menu {
+                if let models = session.models, !models.choices.isEmpty {
+                    Section("Model") {
+                        ForEach(models.choices) { choice in
+                            Button { session.selectModel(choice.id) } label: {
+                                if choice.id == models.current {
+                                    Label(choice.name, systemImage: "checkmark")
+                                } else {
+                                    Text(choice.name)
+                                }
+                            }
+                        }
+                    }
+                    Divider()
+                }
+                Button("Disconnect", role: .destructive) { session.disconnect() }
+            } label: {
+                agentPillLabel(showChevron: true)
+            }
+            .menuStyle(.borderlessButton)
+            .layoutPriority(0)
+            .disabled(session.phase != .ready)
+            .accessibilityLabel(currentModelName.map { "\(agent), model \($0)" } ?? agent)
+        }
+    }
+
+    private func agentPillLabel(showChevron: Bool) -> some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(statusDotColor)
+                .frame(width: 6, height: 6)
+            Text(agent)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(colors.ink)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            if let subtitle = pillSubtitle {
+                Text("·")
+                    .foregroundStyle(colors.muted)
+                Text(subtitle)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(colors.muted)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            if showChevron {
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .foregroundStyle(colors.muted)
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 24)
+        .background(colors.elevated, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(colors.line, lineWidth: 1)
+        }
+    }
+
+    private var statusDotColor: Color {
+        if activeError != nil { return colors.danger }
+        switch session.phase {
+        case .disconnected: return colors.muted.opacity(0.6)
+        case .connecting, .switching: return colors.accent
+        case .ready, .replying, .stopping: return colors.success
+        }
+    }
+
+    private var currentModelName: String? {
+        guard let models = session.models else { return nil }
+        if let found = models.choices.first(where: { $0.id == models.current }) { return found.name }
+        return models.current.isEmpty ? nil : models.current
+    }
+
+    private var pillSubtitle: String? {
+        switch session.phase {
+        case .disconnected: return nil
+        case .connecting: return "Connecting…"
+        case .switching: return "Switching…"
+        case .ready, .replying, .stopping:
+            if let name = currentModelName { return name }
+            return session.needsModelCatalog ? "No model" : "CLI default"
+        }
+    }
+
+    private func sandboxControl(_ binding: Binding<Bool>) -> some View {
+        Button {
+            binding.wrappedValue.toggle()
+        } label: {
+            if binding.wrappedValue {
+                HStack(spacing: 4) {
+                    GlyphImage(.lock, size: 10.5)
+                        .foregroundStyle(colors.muted)
+                    Text("Sandbox")
+                        .font(.system(size: 11))
+                        .foregroundStyle(colors.muted)
+                }
+                .padding(.horizontal, 6)
+                .frame(height: 24)
+            } else {
+                HStack(spacing: 4) {
+                    Image(systemName: "lock.open")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("No sandbox")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundStyle(colors.danger)
+                .padding(.horizontal, 7)
+                .frame(height: 24)
+                .background(colors.danger.opacity(0.12), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+        }
+        .buttonStyle(.plain)
+        .fixedSize(horizontal: true, vertical: false)
+        .layoutPriority(1)
+        .disabled(session.phase != .disconnected)
+        .help(session.phase == .disconnected
+              ? (binding.wrappedValue ? "Agent runs in a restricted sandbox." : "Without a sandbox, the agent can access files and run commands as you.")
+              : "Disconnect to change sandbox mode.")
+        .accessibilityLabel(binding.wrappedValue ? "Sandbox enabled" : "Sandbox disabled")
+    }
+
+    @ViewBuilder private var composerAction: some View {
+        switch session.phase {
+        case .disconnected:
+            Button("Connect") { session.connect() }
+                .buttonStyle(QuietButtonStyle(palette: colors.palette, prominent: true, height: 26))
+        case .connecting:
+            ProgressView().controlSize(.small)
+            Button("Cancel") { session.disconnect() }
+                .buttonStyle(QuietButtonStyle(palette: colors.palette, height: 26))
+        case .switching:
+            ProgressView().controlSize(.small)
+        case .replying, .stopping:
+            Text("esc")
+                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(colors.muted.opacity(0.85))
+            Button { session.stop() } label: {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(colors.danger)
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(Color.white)
+                }
+                .frame(width: 26, height: 26)
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
+            .disabled(session.phase == .stopping)
+            .accessibilityLabel("Stop generating")
+        case .ready:
+            Text("⌘↩")
+                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(colors.muted.opacity(0.85))
+            Button { session.send() } label: {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(session.canSend ? colors.accent : colors.elevated)
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(session.canSend ? colors.keyInk : colors.muted)
+                }
+                .frame(width: 26, height: 26)
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.return, modifiers: .command)
+            .disabled(!session.canSend)
+            .accessibilityLabel("Send message")
         }
     }
 }

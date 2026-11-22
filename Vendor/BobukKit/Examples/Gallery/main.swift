@@ -129,6 +129,39 @@ import BobukUpdates
     print(output.path)
 }
 
+/// A minimalist ACP chat window built with `ChromeWindow(theme:)` and `AgentChatView`.
+@MainActor func renderChat(preset: ThemePreset, dark: Bool, output: URL) throws {
+    let suite = UserDefaults(suiteName: "bobukkit-gallery-chat-\(UUID().uuidString)")!
+    let store = ThemeStore(defaults: suite, defaultAppearance: dark ? .dark : .light,
+                           defaultPreset: preset, appliesToApplication: false)
+    let session = AgentChatSession(makeClient: { throw ACPError.disconnected })
+    let window = ChromeWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 420), theme: store,
+                              trailing: [StripButton(glyph: .plus, label: "New chat"),
+                                         StripButton(glyph: .settings, label: "Settings · ⌘,")],
+                              showsTitle: true)
+    window.title = "Agent Chat"
+    window.setContent(
+        AgentChatView(
+            session: session,
+            agent: "Local agent",
+            intro: "Text-only session without file access.",
+            starters: ["Draft a rule for PDF invoices", "Summarize recent changes"],
+            sandboxed: .constant(true),
+            tokens: store.tokens
+        )
+        .themedSurface(store)
+    )
+    guard let view = window.contentView else { return }
+    view.layoutSubtreeIfNeeded()
+    view.displayIfNeeded()
+    guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw CocoaError(.fileWriteUnknown) }
+    view.cacheDisplay(in: view.bounds, to: bitmap)
+    guard let data = bitmap.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
+    try data.write(to: output)
+    window.close()
+    print(output.path)
+}
+
 let output = URL(fileURLWithPath: CommandLine.arguments.dropFirst().first ?? "/tmp/bobukkit-gallery", isDirectory: true)
 try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
 try MainActor.assumeIsolated {
@@ -144,5 +177,9 @@ try MainActor.assumeIsolated {
             try renderThemedSettings(preset: preset, dark: true, output: output.appendingPathComponent("theme-\(id)-dark.png"))
             try renderThemedSettings(preset: preset, dark: false, output: output.appendingPathComponent("theme-\(id)-light.png"))
         }
+    }
+    if let sage = ThemePreset.named("sage") {
+        try renderChat(preset: sage, dark: false, output: output.appendingPathComponent("chat-light.png"))
+        try renderChat(preset: sage, dark: true, output: output.appendingPathComponent("chat-dark.png"))
     }
 }
