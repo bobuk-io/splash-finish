@@ -37,6 +37,7 @@ import SwiftUI
         case .copilot: return "GitHub Copilot CLI"
         case .agy: return "Antigravity (agy)"
         case .pi: return "pi"
+        case .omp: return "OMP"
         }
     }
     private func header(tokens: ThemeTokens) -> some View {

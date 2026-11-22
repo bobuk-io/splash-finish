@@ -18,7 +18,7 @@ import SplashFinishCore
       clear                        Dismiss every notification and hide
       status [--raw]               Summarize the inbox, or print full JSON with --raw
       doctor                       Diagnose agent integrations
-      install-skills               Install agent skills, hooks and pi extension
+      install-skills               Install agent skills, hooks and extensions
       uninstall-skills             Remove only Splash Finish integrations
       version                      Print the version
 
@@ -34,7 +34,7 @@ import SplashFinishCore
       --sequence INTEGER           Optional sequence within the run
 
     install-skills / uninstall-skills options:
-      --agent all|claude|codex|copilot|agy|pi   Default: all
+      --agent all|claude|codex|copilot|agy|pi|omp   Default: all
 
     Examples:
       splash-finish install-skills
@@ -202,7 +202,7 @@ import SplashFinishCore
                 if selection == "all" { agents = AgentKind.allCases }
                 else if selection == "antigravity" { agents = [.agy] }
                 else if let agent = AgentKind(rawValue: selection) { agents = [agent] }
-                else { throw EventError.invalid("Agent must be all, claude, codex, copilot, agy or pi") }
+                else { throw EventError.invalid("Agent must be all, claude, codex, copilot, agy, pi or omp") }
                 try integrationInstaller().run(install: command == "install-skills", agents: agents).forEach { print($0) }
             default: throw EventError.invalid("Unknown command: \(command). Try splash-finish --help")
             }
