@@ -394,24 +394,176 @@ if let dir = ProcessInfo.processInfo.environment["BOBUKKIT_PREVIEW_DIR"] {
 
 ---
 
-## 9. Text-only ACP Chat (`ACPClient` + `AgentChatView`)
+## 9. Text-only ACP Chat (`ACPClient` + `AgentChatSession` + `AgentChatView`)
+
+BobukKit provides a reusable text-only chat over **ACP v1** (JSON-RPC 2.0 over stdio):
+- `BobukCore`: `ACPProcessIsolation`, `ACPLaunchConfiguration`, `ACPClient`, `ACPModels`, `ACPError`.
+- `BobukUI`: `AgentChatSession` (`@MainActor @Observable`) and `AgentChatView` (minimalist editorial thread, centered empty state with clickable `starters`, unified floating composer with `Agent · Model` menu, optional sandbox pill, `⌘↩` send, `esc` stop, and inline error/recovery banner).
+
+### Step 1: Build `ACPLaunchConfiguration` with explicit process isolation
+
+Always specify `ACPProcessIsolation` explicitly:
+- `.sandboxed(launcher:arguments:)` — launches a trusted sandbox wrapper (e.g. `/usr/bin/sandbox-exec` with `-p <profile>`) and appends `executable.path` + `arguments`. A sandbox launch failure **never** falls back to direct launch.
+- `.unrestricted` — launches `executable` directly with the app's OS privileges. Use only after informed user opt-in.
 
 ```swift
-let chat = AgentChatSession(makeClient: {
-    ACPClient(launch: try appScopedAgentLaunch())
-}, preparePrompt: appPrompt)
-AgentChatView(session: chat, agent: "Local agent",
-              intro: "Text-only session without file access.",
-              starters: ["Draft a rule…"],
-              sandboxed: $sandboxed,
-              tokens: theme.tokens)
+import BobukCore
+import Foundation
+
+func makeAgentLaunch(
+    agentURL: URL,
+    workspace: URL,
+    sandboxed: Bool,
+    sandboxProfile: String
+) throws -> ACPLaunchConfiguration {
+    let isolation: ACPProcessIsolation = sandboxed
+        ? .sandboxed(launcher: URL(fileURLWithPath: "/usr/bin/sandbox-exec"),
+                     arguments: ["-p", sandboxProfile])
+        : .unrestricted
+
+    var args = ["acp", "--disable-telemetry"]
+    if sandboxed { args.append("--sandbox") }
+
+    return ACPLaunchConfiguration(
+        executable: agentURL,
+        arguments: args,
+        directory: workspace,
+        environment: [
+            "HOME": FileManager.default.homeDirectoryForCurrentUser.path,
+            "TMPDIR": workspace.path + "/",
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "LANG": "en_US.UTF-8",
+        ],
+        clientName: "myapp",
+        isolation: isolation
+    )
+}
 ```
 
-`ACPClient` takes an executable, arguments, working directory, optional environment, client name, and explicit `ACPProcessIsolation`. Use `.sandboxed(launcher:arguments:)` for a trusted sandbox launcher and its app-specific policy; the kit appends the agent executable and its arguments. `.unrestricted` starts the agent directly with the caller's OS privileges. Select that mode only with informed user opt-in. A sandbox launch failure never falls back to direct launch. It starts an ACP v1 JSON-RPC session, handles text chunks, model options, and cancellation. The agent must already be authenticated; the chat does not handle credentials. Call `disconnect()` when the window closes and `await shutdown()` before quitting. `lastReply` only exposes a complete reply, not interrupted or truncated text. Validate it before deriving app-specific actions, and never execute it as code.
+### Step 2: Wire `AgentChatSession` and `AgentChatView` in a `ChromeWindow`
 
-Set `missingModelsMessage` on `AgentChatSession` if the agent requires a model catalog. Sending is blocked until the catalog is available and a model is selected. Reconnecting keeps the unsent draft and starts a new conversation.
+```swift
+import AppKit
+import BobukCore
+import BobukUI
+import SwiftUI
 
-The transport does not advertise filesystem or terminal capabilities or attach MCP servers. It rejects client-side tool callbacks. This does **not** prevent the agent's own tools from using its process privileges. The caller is responsible for the executable, process confinement, permissions and environment. If a sandbox is required, do not launch an unrestricted process. Keep ACP capabilities and permission policy separate from the process mode.
+@MainActor @Observable final class ChatOptions {
+    var sandboxed = true
+}
+
+struct AssistantView: View {
+    let chat: AgentChatSession
+    let theme: ThemeStore
+    @Bindable var options: ChatOptions
+    var onSettings: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            AgentChatView(
+                session: chat,
+                agent: "Local agent",
+                intro: "Text-only session without file access.",
+                emptyTitle: "How can I help?",
+                placeholder: "Message…",
+                starters: [
+                    "Draft a rule for PDF invoices",
+                    "Suggest an initial folder structure",
+                ],
+                sandboxed: $options.sandboxed, // omit to hide the sandbox toggle
+                tokens: theme.tokens           // or pass `palette: theme.pickerPalette`
+            )
+
+            // React to a complete, validated reply without mutating anything automatically:
+            if let reply = chat.lastReply {
+                // Parse and preview app-specific proposals here.
+                EmptyView().onAppear { _ = reply }
+            }
+
+            Divider()
+            ShortcutFooter(
+                [.init("⌘↩", "send"), .init("esc", "stop")],
+                palette: theme.pickerPalette,
+                settingsHelp: "Settings · ⌘,",
+                onSettings: onSettings
+            )
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+        }
+        .themedSurface(theme)
+    }
+}
+```
+
+### Step 3: Manage lifecycle in `AppDelegate`
+
+Create the session lazily, disconnect when the window closes (releasing the child process and clearing transcript/draft), and `await chat.shutdown()` before quitting:
+
+```swift
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    private let theme = ThemeStore.shared
+    private let options = ChatOptions()
+    private var window: ChromeWindow?
+    private var terminating = false
+
+    private lazy var chat = AgentChatSession(
+        makeClient: { [weak self] in
+            guard let self else { throw ACPError.disconnected }
+            let launch = try makeAgentLaunch(
+                agentURL: agentBinaryURL,
+                workspace: privateScratchDir,
+                sandboxed: self.options.sandboxed,
+                sandboxProfile: mySandboxProfile
+            )
+            return ACPClient(launch: launch)
+        },
+        preparePrompt: { userText in
+            "Reply with plain text and an optional JSON block.\n\n\(userText)"
+        },
+        displayReply: { rawReply in
+            // Optional: strip wire JSON from the visible bubble while keeping `chat.lastReply` intact.
+            stripJSONBlock(from: rawReply)
+        },
+        // Optional: block Send and show a Reconnect banner if the agent returns no model catalog.
+        missingModelsMessage: "The agent did not return any models. Check your connection, then reconnect."
+    )
+
+    func openChatWindow() {
+        if window == nil {
+            let size = ChromeMetrics.windowSize(forBody: NSSize(width: 480, height: 560))
+            let win = ChromeWindow(contentRect: NSRect(origin: .zero, size: size), theme: theme, showsTitle: true)
+            win.title = "Assistant"
+            win.delegate = self
+            win.setContent(AssistantView(chat: chat, theme: theme, options: options, onSettings: { /* ... */ }))
+            win.center()
+            window = win
+        }
+        window?.makeKeyAndOrderFront(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        chat.disconnect()
+        options.sandboxed = true // restore safe default
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !terminating else { return .terminateLater }
+        terminating = true
+        Task {
+            await chat.shutdown()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+}
+```
+
+### Rules & security boundary
+
+- **No credentials in BobukKit:** the local CLI must already be authenticated in Terminal; `ACPClient` maps `-32000` auth errors to `ACPError.authenticationRequired`.
+- **Complete replies only:** `chat.lastReply` is populated only after `stopReason == "end_turn"` with non-empty text, never on cancelled or truncated turns. Always validate it before deriving app actions, and never execute it as code.
+- **Process boundary vs. ACP callbacks:** `ACPClient` advertises empty `clientCapabilities`, attaches no MCP servers, rejects `session/request_permission` and unknown server methods, and disconnects on unexpected `tool_call` execution (`ACPError.unexpectedTool`). That does **not** restrict the agent's own built-in tools — the caller owns process confinement, working directory, and environment. Keep ACP policy and process isolation separate.
+- **Offline tests:** pass a small `/bin/bash` fixture script to `ACPLaunchConfiguration(..., isolation: .unrestricted)` (see `Tests/BobukCoreTests/ACPClientTests.swift` and `Tests/BobukUITests/AgentChatSessionTests.swift`). Never call live models or real credentials in tests.
 
 ---
 
