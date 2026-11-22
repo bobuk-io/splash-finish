@@ -568,7 +568,8 @@ Create the session lazily, disconnect when the window closes (releasing the chil
             let win = ChromeWindow(contentRect: NSRect(origin: .zero, size: size), theme: theme, showsTitle: true)
             win.title = "Assistant"
             win.delegate = self
-            win.setContent(AssistantView(chat: chat, theme: theme, options: options, onSettings: { /* ... */ }))
+            let hosting = win.setContent(AssistantView(chat: chat, theme: theme, options: options, onSettings: { /* ... */ }))
+            hosting.sizingOptions = []
             win.center()
             window = win
         }
@@ -623,7 +624,13 @@ let quick = try await ACPAgentPreset.ask(
 )
 ```
 
-For UI sessions (`AgentChatSession`), pass `initialModel:` and `initialEffort:` to pre-select them automatically on connect.
+For UI sessions (`AgentChatSession`), pass `initialModel:` and `initialEffort:` to pre-select them automatically on connect, and `idleTimeout:` (e.g. `.seconds(15 * 60)`) to automatically terminate an idle agent subprocess after inactivity while keeping the visible transcript and draft intact (`disconnectedForInactivity` becomes `true`, and `noteActivity()` resets the timer).
+
+### Agent auto-detection & ACP adapter setup
+
+- Use `ACPAgentPreset.detectAll()` to distinguish `.ready(executableURL:)`, `.needsACPAdapter(cliURL:)` (base CLI like `codex`, `claude`, or `pi` is installed, but its separate `-acp` adapter is missing), and `.notInstalled`.
+- Lookup scans common macOS GUI-invisible paths (`~/.local/bin`, `~/.gemini/antigravity-cli/bin`, `~/.claude/local`, `~/.local/share/mise/installs/*/latest/bin`, `~/.local/share/mise/shims`, `~/.nvm/versions/node/*/bin`, `~/.fnm/...`, `~/.volta/bin`, `~/.bun/bin`, `~/Library/pnpm`, `~/.npmrc` `prefix`, Homebrew) and keeps shim `argv[0]` names intact.
+- Call `try await preset.installACPAdapter()` to install a missing npm ACP adapter (`@agentclientprotocol/codex-acp`, `@agentclientprotocol/claude-agent-acp`, `pi-acp`). `AgentChatView` automatically shows an **Install ACP Adapter** banner when a `.needsACPAdapter` agent is selected, and Settings forms can embed `ACPAdapterInstallRow(preset:onInstalled:)`.
 
 ### Rules & security boundary
 

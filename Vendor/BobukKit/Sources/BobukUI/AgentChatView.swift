@@ -16,26 +16,38 @@ import SwiftUI
     public private(set) var lastReply: String?
     public private(set) var activeTool: String?
     public private(set) var error: String?
+    /// True when the subprocess was closed automatically after `idleTimeout` of inactivity.
+    public private(set) var disconnectedForInactivity = false
+    /// When set to a positive duration, closes the idle agent subprocess after that much inactivity
+    /// in `.ready` state while keeping the visible transcript and draft intact. `nil` disables it.
+    public var idleTimeout: Duration? {
+        didSet { rescheduleIdleTimer() }
+    }
+    /// Called after the agent subprocess is closed due to `idleTimeout`.
+    @ObservationIgnored public var onIdleDisconnect: (() -> Void)?
     public var draft = ""
 
     private var client: ACPClient?
     @ObservationIgnored private var replyTask: Task<Void, Never>?
+    @ObservationIgnored private var idleTask: Task<Void, Never>?
     private var generation = 0
     private let makeClient: () throws -> ACPClient
     private let preparePrompt: (String) -> String
     private let displayReply: (String) -> String
     private let missingModelsMessage: String?
     private let requiresModelCatalog: () -> Bool
-    private let initialModel: String?
-    private let initialEffort: String?
+    public var initialModel: String?
+    public var initialEffort: String?
 
     /// Supply `missingModelsMessage` for agents that cannot answer without a model catalog.
     /// Pass `requiresModelCatalog` when switching between agents with different catalog behavior.
     /// Pass `initialModel` / `initialEffort` to pre-select a model and reasoning effort on connect.
+    /// Pass `idleTimeout` to automatically terminate an idle agent subprocess after inactivity.
     public init(makeClient: @escaping () throws -> ACPClient, preparePrompt: @escaping (String) -> String = { $0 },
                 displayReply: @escaping (String) -> String = { $0 }, missingModelsMessage: String? = nil,
                 requiresModelCatalog: (() -> Bool)? = nil,
-                initialModel: String? = nil, initialEffort: String? = nil) {
+                initialModel: String? = nil, initialEffort: String? = nil,
+                idleTimeout: Duration? = nil) {
         self.makeClient = makeClient
         self.preparePrompt = preparePrompt
         self.displayReply = displayReply
@@ -43,6 +55,7 @@ import SwiftUI
         self.requiresModelCatalog = requiresModelCatalog ?? { missingModelsMessage != nil }
         self.initialModel = initialModel
         self.initialEffort = initialEffort
+        self.idleTimeout = idleTimeout
     }
 
     public var canSend: Bool {
@@ -61,6 +74,8 @@ import SwiftUI
 
     public func connect() {
         guard phase == .disconnected else { return }
+        cancelIdleTimer()
+        disconnectedForInactivity = false
         error = nil
         phase = .connecting
         generation += 1
@@ -80,6 +95,7 @@ import SwiftUI
                     guard serial == generation else { return }
                     self.models = models
                     phase = .ready
+                    rescheduleIdleTimer()
                 } catch { await failed(error, serial: serial) }
             }
         } catch {
@@ -88,8 +104,15 @@ import SwiftUI
         }
     }
 
+    /// Resets the inactivity countdown while the session is `.ready`.
+    public func noteActivity() {
+        guard phase == .ready else { return }
+        rescheduleIdleTimer()
+    }
+
     public func selectModel(_ id: String) {
         guard phase == .ready, let client, id != models?.current else { return }
+        cancelIdleTimer()
         let serial = generation
         phase = .switching
         error = nil
@@ -99,6 +122,7 @@ import SwiftUI
                 guard serial == generation else { return }
                 self.models = models
                 phase = .ready
+                rescheduleIdleTimer()
             } catch { await failed(error, serial: serial) }
         }
     }
@@ -111,6 +135,7 @@ import SwiftUI
             error = ACPError.promptTooLarge.localizedDescription
             return
         }
+        cancelIdleTimer()
         let serial = generation
         phase = .replying
         error = nil
@@ -139,11 +164,13 @@ import SwiftUI
                 }
                 discardEmptyReply()
                 phase = .ready
+                rescheduleIdleTimer()
             } catch is CancellationError {
                 guard serial == generation else { return }
                 activeTool = nil
                 discardEmptyReply()
                 phase = .ready
+                rescheduleIdleTimer()
             } catch {
                 if serial == generation {
                     activeTool = nil
@@ -186,18 +213,49 @@ import SwiftUI
 
     private func reset() -> ACPClient? {
         generation += 1
+        cancelIdleTimer()
         replyTask?.cancel()
         replyTask = nil
         let old = client
         client = nil
         models = nil
         phase = .disconnected
+        disconnectedForInactivity = false
         error = nil
         draft = ""
         messages.removeAll()
         lastReply = nil
         activeTool = nil
         return old
+    }
+
+    private func cancelIdleTimer() {
+        idleTask?.cancel()
+        idleTask = nil
+    }
+
+    private func rescheduleIdleTimer() {
+        cancelIdleTimer()
+        guard phase == .ready, let timeout = idleTimeout, timeout > .zero else { return }
+        let serial = generation
+        idleTask = Task { [weak self] in
+            do { try await Task.sleep(for: timeout) } catch { return }
+            await self?.expireIdle(serial: serial)
+        }
+    }
+
+    private func expireIdle(serial: Int) async {
+        guard serial == generation, phase == .ready else { return }
+        idleTask = nil
+        generation += 1
+        let idleClient = client
+        client = nil
+        models = nil
+        phase = .disconnected
+        activeTool = nil
+        disconnectedForInactivity = true
+        onIdleDisconnect?()
+        await idleClient?.close()
     }
 
     private func setActiveTool(_ tool: String?, serial: Int) {
@@ -219,10 +277,12 @@ import SwiftUI
 
     private func failed(_ error: Error, serial: Int) async {
         guard serial == generation else { return }
+        cancelIdleTimer()
         let failedClient = client
         client = nil
         models = nil
         phase = .disconnected
+        disconnectedForInactivity = false
         activeTool = nil
         self.error = error.localizedDescription
         await failedClient?.close()
@@ -289,6 +349,10 @@ public struct AgentChatView: View {
     @Bindable private var session: AgentChatSession
     @FocusState private var composerFocused: Bool
     @State private var copiedMessageID: UUID?
+    @State private var agentStatuses: [ACPAgentStatus] = []
+    @State private var installingAdapterForID: String?
+    @State private var adapterInstallError: String?
+    @State private var copiedInstallCommand = false
     private let emptyTitle: String
     private let agent: String
     private let intro: String
@@ -354,6 +418,48 @@ public struct AgentChatView: View {
     private var isStreaming: Bool { session.phase == .replying || session.phase == .stopping }
     private var activeError: String? { session.error ?? (session.phase == .ready ? session.modelProblem : nil) }
 
+    private var resolvedAgentStatuses: [ACPAgentStatus] {
+        agentStatuses.isEmpty && !agents.isEmpty ? ACPAgentPreset.detectAll(in: agents) : agentStatuses
+    }
+
+    private var selectedAgentMissingAdapter: ACPAgentPreset? {
+        guard session.phase == .disconnected, let current = selectedAgent?.wrappedValue else { return nil }
+        guard let status = resolvedAgentStatuses.first(where: { $0.id == current.id }),
+              status.needsACPAdapter,
+              current.adapterInstallCommand != nil else { return nil }
+        return current
+    }
+
+    private func refreshAgentStatuses() {
+        guard !agents.isEmpty else { return }
+        agentStatuses = ACPAgentPreset.detectAll(in: agents)
+    }
+
+    private func installAdapter(for preset: ACPAgentPreset) {
+        guard installingAdapterForID == nil else { return }
+        installingAdapterForID = preset.id
+        adapterInstallError = nil
+        Task {
+            do {
+                _ = try await preset.installACPAdapter()
+                await MainActor.run {
+                    installingAdapterForID = nil
+                    adapterInstallError = nil
+                    refreshAgentStatuses()
+                    if selectedAgent?.wrappedValue == preset && session.phase == .disconnected {
+                        session.connect()
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    installingAdapterForID = nil
+                    adapterInstallError = error.localizedDescription
+                    refreshAgentStatuses()
+                }
+            }
+        }
+    }
+
     public var body: some View {
         VStack(spacing: 0) {
             if session.messages.isEmpty {
@@ -362,7 +468,11 @@ public struct AgentChatView: View {
                 transcript
             }
 
-            if let message = activeError {
+            if let preset = selectedAgentMissingAdapter {
+                adapterInstallBanner(preset)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
+            } else if let message = activeError {
                 recoveryBanner(message)
                     .padding(.horizontal, 16)
                     .padding(.bottom, 10)
@@ -376,8 +486,19 @@ public struct AgentChatView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(colors.panel)
         .foregroundStyle(colors.ink)
+        .onAppear {
+            refreshAgentStatuses()
+        }
+        .onChange(of: selectedAgent?.wrappedValue) { _, _ in
+            adapterInstallError = nil
+            copiedInstallCommand = false
+            refreshAgentStatuses()
+        }
         .onChange(of: session.phase) { _, new in
             if new == .ready { composerFocused = true }
+        }
+        .onChange(of: session.draft) { _, _ in
+            session.noteActivity()
         }
     }
 
@@ -573,7 +694,76 @@ public struct AgentChatView: View {
         return "GENERATING"
     }
 
-    // MARK: - Recovery banner
+    // MARK: - Recovery & adapter install banners
+
+    private func adapterInstallBanner(_ preset: ACPAgentPreset) -> some View {
+        let isInstalling = installingAdapterForID == preset.id
+        let command = preset.adapterInstallCommand ?? preset.installHint
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: adapterInstallError == nil ? "puzzlepiece.extension.fill" : "exclamationmark.triangle.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(adapterInstallError == nil ? colors.accent : colors.danger)
+                    .padding(.top, 1)
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(preset.name) CLI is installed, but needs its ACP adapter to chat here.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(colors.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(command)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(colors.muted)
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                    if let installError = adapterInstallError {
+                        Text(installError)
+                            .font(.system(size: 11))
+                            .foregroundStyle(colors.danger)
+                            .lineLimit(4)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 4)
+            }
+
+            HStack(spacing: 8) {
+                if isInstalling {
+                    ProgressView().controlSize(.small)
+                    Text("Installing ACP adapter…")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(colors.muted)
+                } else {
+                    Button(adapterInstallError == nil ? "Install ACP Adapter" : "Retry Install") {
+                        installAdapter(for: preset)
+                    }
+                    .buttonStyle(QuietButtonStyle(palette: colors.palette, prominent: true, height: 24))
+
+                    Button(copiedInstallCommand ? "Copied" : "Copy Command") {
+                        PlainPasteboard.copy(command)
+                        copiedInstallCommand = true
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .seconds(1.3))
+                            copiedInstallCommand = false
+                        }
+                    }
+                    .buttonStyle(QuietButtonStyle(palette: colors.palette, height: 24))
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            (adapterInstallError == nil ? colors.accent : colors.danger).opacity(colors.isDark ? 0.14 : 0.08),
+            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder((adapterInstallError == nil ? colors.accent : colors.danger).opacity(0.32), lineWidth: 1)
+        }
+    }
 
     private func recoveryBanner(_ message: String) -> some View {
         HStack(spacing: 10) {
@@ -584,6 +774,7 @@ public struct AgentChatView: View {
             Text(message)
                 .font(.system(size: 12))
                 .foregroundStyle(colors.ink)
+                .lineLimit(6)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
             if session.phase == .disconnected {
@@ -667,20 +858,28 @@ public struct AgentChatView: View {
         } else {
             Menu {
                 if let selectedAgent, !agents.isEmpty {
-                    let installed = ACPAgentPreset.detectInstalled(in: agents).map(\.preset)
-                    let installedIDs = Set(installed.map(\.id))
-                    let unavailable = agents.filter { !installedIDs.contains($0.id) }
-                    if !installed.isEmpty {
+                    let statuses = resolvedAgentStatuses
+                    let ready = statuses.filter(\.isReady)
+                    let needsAdapter = statuses.filter(\.needsACPAdapter)
+                    let unavailable = statuses.filter { !$0.isReady && !$0.needsACPAdapter }
+                    if !ready.isEmpty {
                         Section("Available Agents") {
-                            ForEach(installed) { preset in
-                                agentMenuItem(preset, selectedAgent: selectedAgent, installed: true)
+                            ForEach(ready) { status in
+                                agentMenuItem(status.preset, selectedAgent: selectedAgent, suffix: nil)
+                            }
+                        }
+                    }
+                    if !needsAdapter.isEmpty {
+                        Section("Needs ACP Adapter") {
+                            ForEach(needsAdapter) { status in
+                                agentMenuItem(status.preset, selectedAgent: selectedAgent, suffix: "install ACP adapter")
                             }
                         }
                     }
                     if !unavailable.isEmpty {
                         Section("Not Installed") {
-                            ForEach(unavailable) { preset in
-                                agentMenuItem(preset, selectedAgent: selectedAgent, installed: false)
+                            ForEach(unavailable) { status in
+                                agentMenuItem(status.preset, selectedAgent: selectedAgent, suffix: "not installed")
                             }
                         }
                     }
@@ -712,13 +911,13 @@ public struct AgentChatView: View {
         }
     }
 
-    private func agentMenuItem(_ preset: ACPAgentPreset, selectedAgent: Binding<ACPAgentPreset>, installed: Bool) -> some View {
+    private func agentMenuItem(_ preset: ACPAgentPreset, selectedAgent: Binding<ACPAgentPreset>, suffix: String?) -> some View {
         Button {
             guard preset != selectedAgent.wrappedValue else { return }
             if session.phase != .disconnected { session.disconnect() }
             selectedAgent.wrappedValue = preset
         } label: {
-            let label = installed ? preset.name : "\(preset.name) (not installed)"
+            let label = suffix.map { "\(preset.name) (\($0))" } ?? preset.name
             if preset == selectedAgent.wrappedValue {
                 Label(label, systemImage: "checkmark")
             } else {
@@ -762,6 +961,9 @@ public struct AgentChatView: View {
     }
 
     private var statusDotColor: Color {
+        if selectedAgentMissingAdapter != nil {
+            return adapterInstallError == nil ? colors.accent : colors.danger
+        }
         if activeError != nil { return colors.danger }
         switch session.phase {
         case .disconnected: return colors.muted.opacity(0.6)
@@ -778,7 +980,7 @@ public struct AgentChatView: View {
 
     private var pillSubtitle: String? {
         switch session.phase {
-        case .disconnected: return nil
+        case .disconnected: return session.disconnectedForInactivity ? "Idle" : nil
         case .connecting: return "Connecting…"
         case .switching: return "Switching…"
         case .ready, .replying, .stopping:
@@ -871,6 +1073,86 @@ public struct AgentChatView: View {
             .keyboardShortcut(.return, modifiers: .command)
             .disabled(!session.canSend)
             .accessibilityLabel("Send message")
+        }
+    }
+}
+
+/// Compact row for Settings screens that offers one-click installation of a missing ACP adapter
+/// when an agent's base CLI (e.g. `codex`, `claude`, `pi`) is installed without its `-acp` bridge.
+public struct ACPAdapterInstallRow: View {
+    public let preset: ACPAgentPreset
+    public var onInstalled: (() -> Void)?
+
+    @State private var installing = false
+    @State private var copied = false
+    @State private var errorMessage: String?
+
+    public init(preset: ACPAgentPreset, onInstalled: (() -> Void)? = nil) {
+        self.preset = preset
+        self.onInstalled = onInstalled
+    }
+
+    public var body: some View {
+        let command = preset.adapterInstallCommand ?? preset.installHint
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(preset.name) CLI found — ACP adapter not installed")
+                        .font(.callout.weight(.medium))
+                    Text(command)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                Spacer(minLength: 8)
+                if installing {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button(copied ? "Copied" : "Copy") {
+                        PlainPasteboard.copy(command)
+                        copied = true
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .seconds(1.3))
+                            copied = false
+                        }
+                    }
+                    .controlSize(.small)
+
+                    if preset.adapterNPMPackage != nil {
+                        Button(errorMessage == nil ? "Install Adapter" : "Retry") {
+                            runInstall()
+                        }
+                        .controlSize(.small)
+                    }
+                }
+            }
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .lineLimit(3)
+            }
+        }
+    }
+
+    private func runInstall() {
+        guard !installing else { return }
+        installing = true
+        errorMessage = nil
+        Task {
+            do {
+                _ = try await preset.installACPAdapter()
+                await MainActor.run {
+                    installing = false
+                    errorMessage = nil
+                    onInstalled?()
+                }
+            } catch {
+                await MainActor.run {
+                    installing = false
+                    errorMessage = error.localizedDescription
+                }
+            }
         }
     }
 }

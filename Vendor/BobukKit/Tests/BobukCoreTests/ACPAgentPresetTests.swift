@@ -35,14 +35,127 @@ import Testing
         #expect(ACPAgentPreset.preferredAvailable(in: ACPAgentPreset.all, home: home, environment: emptyEnv) == .claude)
     }
 
+    @Test func detectsReadyNeedsAdapterAndNotInstalledSeparately() throws {
+        let dir = try TemporaryDirectory(prefix: "acp-presets-status")
+        defer { dir.remove() }
+        let home = dir.url
+        let extraBin = dir.url.appendingPathComponent("custom-bin")
+        try makeExecutable(at: home.appendingPathComponent(".gemini/antigravity-cli/bin/agy"))
+        try makeExecutable(at: home.appendingPathComponent(".local/bin/claude"))
+        try makeExecutable(at: extraBin.appendingPathComponent("codex"))
+        try makeExecutable(at: home.appendingPathComponent(".nvm/versions/node/v22.5.0/bin/pi"))
+        try makeExecutable(at: home.appendingPathComponent(".local/share/mise/installs/gemini-cli/latest/bin/gemini"))
+
+        let env: [String: String] = ["PATH": extraBin.path]
+        let statuses = ACPAgentPreset.detectAll(in: ACPAgentPreset.all, home: home, environment: env)
+        let byID = Dictionary(uniqueKeysWithValues: statuses.map { ($0.id, $0) })
+
+        #expect(byID["antigravity"]?.isReady == true)
+        #expect(byID["gemini"]?.isReady == true)
+        #expect(byID["codex"]?.needsACPAdapter == true)
+        #expect(byID["codex"]?.cliURL?.lastPathComponent == "codex")
+        #expect(byID["claude"]?.needsACPAdapter == true)
+        #expect(byID["claude"]?.cliURL?.lastPathComponent == "claude")
+        #expect(byID["pi"]?.needsACPAdapter == true)
+        #expect(byID["kimi"]?.availability == .notInstalled)
+        #expect(byID["opencode"]?.availability == .notInstalled)
+
+        // Launching an agent whose CLI is present without its ACP adapter throws acpAdapterMissing.
+        let workspace = dir.url.appendingPathComponent("work")
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        #expect(throws: ACPAgentLaunchError.acpAdapterMissing(agent: "Claude", installHint: ACPAgentPreset.claude.installHint)) {
+            _ = try ACPAgentPreset.claude.launch(in: workspace, clientName: "test", home: home, environment: env)
+        }
+    }
+
+    @Test func detectsAgentsFromNpmrcPrefixAndPreservesShimName() throws {
+        let dir = try TemporaryDirectory(prefix: "acp-presets-npmrc")
+        defer { dir.remove() }
+        let home = dir.url
+        let npmPrefix = home.appendingPathComponent("my-npm-global")
+        try "prefix=~/my-npm-global\n".write(to: home.appendingPathComponent(".npmrc"), atomically: true, encoding: .utf8)
+        try makeExecutable(at: npmPrefix.appendingPathComponent("bin/codex-acp"))
+
+        // Also test a shim symlink pointing to a multi-call 'mise' binary.
+        let miseBin = dir.url.appendingPathComponent("mise")
+        try makeExecutable(at: miseBin)
+        let shimsDir = home.appendingPathComponent(".local/share/mise/shims")
+        try FileManager.default.createDirectory(at: shimsDir, withIntermediateDirectories: true)
+        let geminiShim = shimsDir.appendingPathComponent("gemini")
+        try FileManager.default.createSymbolicLink(at: geminiShim, withDestinationURL: miseBin)
+
+        let env: [String: String] = ["PATH": ""]
+        let codexURL = ACPAgentPreset.codex.resolveExecutable(home: home, environment: env)
+        #expect(codexURL?.lastPathComponent == "codex-acp")
+
+        let geminiURL = ACPAgentPreset.gemini.resolveExecutable(home: home, environment: env)
+        #expect(geminiURL?.lastPathComponent == "gemini")
+    }
+
+    @Test func installsACPAdapterUsingNPMAndDetectsResult() async throws {
+        let dir = try TemporaryDirectory(prefix: "acp-adapter-install")
+        defer { dir.remove() }
+        let home = dir.url
+        let binDir = home.appendingPathComponent(".local/bin")
+        let fakeNPM = binDir.appendingPathComponent("npm")
+        let script = """
+        #!/bin/sh
+        set -eu
+        echo "installing $*"
+        if [ "$1" = "install" ] && [ "$2" = "-g" ] && [ "$3" = "@agentclientprotocol/codex-acp" ]; then
+            printf '#!/bin/sh\\nexit 0\\n' > "\(binDir.path)/codex-acp"
+            chmod 755 "\(binDir.path)/codex-acp"
+            exit 0
+        fi
+        echo "unexpected args: $*" >&2
+        exit 2
+        """
+        try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+        try Data(script.utf8).write(to: fakeNPM)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeNPM.path)
+
+        let env: [String: String] = ["PATH": "", "BOBUK_ACP_NPM_PATH": fakeNPM.path]
+        actor OutputLog {
+            var chunks: [String] = []
+            func add(_ s: String) { chunks.append(s) }
+            func joined() -> String { chunks.joined() }
+        }
+        let log = OutputLog()
+        let installedURL = try await ACPAgentPreset.codex.installACPAdapter(
+            home: home,
+            environment: env,
+            onOutput: { await log.add($0) }
+        )
+        #expect(installedURL.lastPathComponent == "codex-acp")
+        #expect(await log.joined().contains("@agentclientprotocol/codex-acp"))
+        #expect(ACPAgentPreset.codex.detectAvailability(home: home, environment: ["PATH": ""]) == .ready(executableURL: installedURL))
+
+        // Agents with built-in ACP do not use npm adapter installation.
+        do {
+            _ = try await ACPAgentPreset.kimi.installACPAdapter(home: home, environment: env)
+            Issue.record("Expected notApplicable for kimi")
+        } catch let error as ACPAdapterInstallError {
+            #expect(error == .notApplicable(agent: "Kimi"))
+        }
+    }
+
     @Test func overrideAndMissingErrors() throws {
         let dir = try TemporaryDirectory(prefix: "acp-presets-override")
         defer { dir.remove() }
         let workspace = dir.url.appendingPathComponent("work")
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
 
-        #expect(throws: ACPAgentLaunchError.notInstalled(agent: "Codex", installHint: ACPAgentPreset.codex.installHint)) {
-            _ = try ACPAgentPreset.codex.launch(in: workspace, clientName: "test", home: dir.url, environment: ["PATH": ""])
+        let nonexistentPreset = ACPAgentPreset(
+            id: "nonexistent-test",
+            name: "Nonexistent",
+            executables: ["bobuk-nonexistent-acp-binary"],
+            cliExecutables: ["bobuk-nonexistent-cli-binary"],
+            arguments: [],
+            overrideVariable: "BOBUK_ACP_NONEXISTENT_PATH",
+            installHint: "Install Nonexistent."
+        )
+        #expect(throws: ACPAgentLaunchError.notInstalled(agent: "Nonexistent", installHint: "Install Nonexistent.")) {
+            _ = try nonexistentPreset.launch(in: workspace, clientName: "test", home: dir.url, environment: ["PATH": ""])
         }
 
         #expect(throws: ACPAgentLaunchError.invalidOverride(variable: "BOBUK_ACP_CODEX_PATH")) {
