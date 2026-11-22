@@ -6,9 +6,11 @@ author's name, and Ukrainian **кіт** means “cat”. A toolkit with a cat in
 The shared library of the native bobuk-io apps (Ting, lowkey, Splash Finish, HAScS): their
 window shell, panels, controls, system services, Homebrew updates and the release kit.
 Canonical checkout: `~/GitHub/bobuk.io/BobukKit`. Requires macOS 14 and Swift 6.2.
-**Before you write a window, a panel, a button style, a hotkey, a file store, a process runner
-or an update flow in an app, find it in the catalog below.** If it is missing and two apps
-need it, add it here, not to the app. Agents: read `AGENTS.md`.
+**Before you write a window, a panel, a button style, a theme, a hotkey, a file store, a process
+runner or an update flow in an app, find it in the catalog below.** If it is missing and two apps
+need it, add it here, not to the app. Agents: read `AGENTS.md` and **`COOKBOOK.md`** (copy-pasteable
+recipes, exact API signatures, and known macOS/Swift 6 pitfalls — also vendored into every app at
+`Vendor/BobukKit/COOKBOOK.md`).
 
 ## Catalog: task → component
 

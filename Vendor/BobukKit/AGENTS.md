@@ -4,9 +4,11 @@ BobukKit is the shared library of the native bobuk-io apps. It travels into ever
 `Vendor/BobukKit` (a read-only snapshot) and its release kit as `Scripts/release`.
 
 - **Look here first.** Before writing a window, panel, close/back button, icon, button style,
-  palette helper, hotkey, key-code table, layout swap, file store, safe write, process runner,
-  Keychain access, login item, IPC, Homebrew/Sparkle update or test helper in an app, find it in
-  the catalog of `README.md`. Use it. If it almost fits, extend the kit; do not fork it in the app.
+  palette helper, theme UI, hotkey, key-code table, layout swap, file store, safe write, process
+  runner, Keychain access, login item, IPC, Homebrew/Sparkle update or test helper in an app, find
+  it in `README.md` (catalog) and read **`COOKBOOK.md`** (copy-pasteable recipes, exact API
+  signatures and known pitfalls; also vendored at `Vendor/BobukKit/COOKBOOK.md` in every app). Use
+  it. If it almost fits, extend the kit; do not fork it in the app.
 - **Never edit `Vendor/BobukKit` or `Scripts/release` in an app.** Change the canonical checkout
   `~/GitHub/bobuk.io/BobukKit`, then run `Scripts/sync.sh` and `Scripts/sync.sh --check`.
 - **Windows:** `ChromeWindow`. Close and other window controls are `StripButton`s in its strip.
