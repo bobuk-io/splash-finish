@@ -119,6 +119,38 @@ import Testing
         #expect(reloaded.effort == "high")
         #expect(reloaded.sandboxed == false)
     }
+
+    @Test func staleInitialModelFallsBackToAgentDefaultOnConnect() async throws {
+        let dir = try TemporaryDirectory(prefix: "acp-stale-model")
+        defer { dir.remove() }
+        let script = #"""
+        set -eu
+        IFS= read -r line
+        printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+        IFS= read -r line
+        printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s1","configOptions":[{"type":"select","category":"model","id":"model","currentValue":"gpt-6.2-astra","options":[{"value":"gpt-6.2-astra","name":"GPT 6.2 Astra"}]}]}}'
+        IFS= read -r line || true
+        """#
+        let chat = AgentChatSession(
+            makeClient: {
+                ACPClient(launch: .init(
+                    executable: URL(fileURLWithPath: "/bin/bash"),
+                    arguments: ["-c", script],
+                    directory: dir.url,
+                    environment: ["PATH": "/usr/bin:/bin"],
+                    clientName: "test",
+                    isolation: .unrestricted
+                ), requestTimeout: .seconds(2))
+            },
+            initialModel: "gemini-4-neon"
+        )
+        chat.connect()
+        for _ in 0..<200 where chat.phase == .connecting { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(chat.phase == .ready)
+        #expect(chat.error == nil)
+        #expect(chat.models?.current == "gpt-6.2-astra")
+        await chat.shutdown()
+    }
     @Test(arguments: [true, false]) func modelCatalogRequirement(_ required: Bool) async throws {
         let dir = try TemporaryDirectory(prefix: "acp-no-models")
         defer { dir.remove() }

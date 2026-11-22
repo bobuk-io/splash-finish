@@ -200,10 +200,12 @@ import UniformTypeIdentifiers
                         onEfforts: { [weak self] efforts in await self?.updateEfforts(efforts, serial: serial) }
                     )
                     if let initialModel, !initialModel.isEmpty {
-                        models = try await client.selectModel(initialModel)
+                        if let updated = try? await client.selectModel(initialModel) {
+                            models = updated
+                        }
                     }
                     if let initialEffort, !initialEffort.isEmpty {
-                        _ = try await client.selectEffort(initialEffort)
+                        _ = try? await client.selectEffort(initialEffort)
                     }
                     let efforts = await client.effortOptions()
                     guard serial == generation else { return }
@@ -333,10 +335,12 @@ import UniformTypeIdentifiers
                         onEfforts: { [weak self] efforts in await self?.updateEfforts(efforts, serial: serial) }
                     )
                     if let initialModel, !initialModel.isEmpty {
-                        models = try await newClient.selectModel(initialModel)
+                        if let updated = try? await newClient.selectModel(initialModel) {
+                            models = updated
+                        }
                     }
                     if let initialEffort, !initialEffort.isEmpty {
-                        _ = try await newClient.selectEffort(initialEffort)
+                        _ = try? await newClient.selectEffort(initialEffort)
                     }
                     let efforts = await newClient.effortOptions()
                     guard serial == generation else { return }
@@ -464,10 +468,12 @@ import UniformTypeIdentifiers
                     onEfforts: { [weak self] efforts in await self?.updateEfforts(efforts, serial: serial) }
                 )
                 if let initialModel, !initialModel.isEmpty {
-                    models = try await nextClient.selectModel(initialModel)
+                    if let updated = try? await nextClient.selectModel(initialModel) {
+                        models = updated
+                    }
                 }
                 if let initialEffort, !initialEffort.isEmpty {
-                    _ = try await nextClient.selectEffort(initialEffort)
+                    _ = try? await nextClient.selectEffort(initialEffort)
                 }
                 guard serial == generation else { return }
                 self.models = models
@@ -1634,6 +1640,13 @@ public struct AgentChatView: View {
                             }
                         }
                     }
+                    if statuses.isEmpty {
+                        Section("Agents") {
+                            ForEach(agents) { preset in
+                                agentMenuItem(preset, selectedAgent: selectedAgent, suffix: nil)
+                            }
+                        }
+                    }
                 }
                 if isConnected, let models = session.models, !models.choices.isEmpty {
                     Section("Model") {
@@ -1679,6 +1692,8 @@ public struct AgentChatView: View {
         Button {
             guard preset != selectedAgent.wrappedValue else { return }
             if session.phase != .disconnected { session.disconnect() }
+            session.initialModel = nil
+            session.initialEffort = nil
             selectedAgent.wrappedValue = preset
         } label: {
             let label = suffix.map { "\(preset.name) (\($0))" } ?? preset.name
