@@ -75,7 +75,7 @@ public struct AgentEvent: Codable, Equatable, Identifiable, Sendable {
 
     public static func isSafeSourceURL(_ text: String) -> Bool {
         guard text.utf8.count <= 2048, let url = URL(string: text), let scheme = url.scheme?.lowercased() else { return false }
-        return ["https", "http", "vscode", "vscode-insiders", "cursor", "windsurf", "zed", "iterm2", "codex"].contains(scheme)
+        return ["https", "http", "vscode", "vscode-insiders", "cursor", "windsurf", "zed", "iterm2", "codex", "agterm"].contains(scheme)
     }
 }
 
