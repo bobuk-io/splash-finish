@@ -11,6 +11,8 @@ enum ChatMarkdownBlock: Equatable {
     case quote(String)
     case bullet(String)
     case ordered(number: String, text: String)
+    case rule
+    case table(headers: [String], rows: [[String]])
 
     static func parse(_ raw: String) -> [ChatMarkdownBlock] {
         let lines = raw.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
@@ -48,6 +50,35 @@ enum ChatMarkdownBlock: Equatable {
             if trimmed.isEmpty {
                 flushParagraph()
                 index += 1
+                continue
+            }
+
+            if isHorizontalRule(trimmed) {
+                flushParagraph()
+                blocks.append(.rule)
+                index += 1
+                continue
+            }
+
+            if index + 1 < lines.count,
+               let headers = parseTableRow(trimmed),
+               isTableSeparator(lines[index + 1].trimmingCharacters(in: .whitespaces), expectedColumns: headers.count) {
+                flushParagraph()
+                var rows: [[String]] = []
+                index += 2
+                while index < lines.count {
+                    let rowTrimmed = lines[index].trimmingCharacters(in: .whitespaces)
+                    guard !rowTrimmed.isEmpty, let cells = parseTableRow(rowTrimmed) else { break }
+                    var normalized = cells
+                    if normalized.count < headers.count {
+                        normalized.append(contentsOf: repeatElement("", count: headers.count - normalized.count))
+                    } else if normalized.count > headers.count {
+                        normalized = Array(normalized.prefix(headers.count))
+                    }
+                    rows.append(normalized)
+                    index += 1
+                }
+                blocks.append(.table(headers: headers, rows: rows))
                 continue
             }
 
@@ -121,6 +152,33 @@ enum ChatMarkdownBlock: Equatable {
         let text = line[line.index(after: afterDot)...].trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { return nil }
         return .ordered(number: String(prefix), text: text)
+    }
+
+    private static func isHorizontalRule(_ line: String) -> Bool {
+        let stripped = line.replacingOccurrences(of: " ", with: "")
+        guard stripped.count >= 3 else { return false }
+        return stripped.allSatisfy { $0 == "-" }
+            || stripped.allSatisfy { $0 == "*" }
+            || stripped.allSatisfy { $0 == "_" }
+    }
+
+    private static func parseTableRow(_ line: String) -> [String]? {
+        guard line.contains("|") else { return nil }
+        var body = line
+        if body.hasPrefix("|") { body.removeFirst() }
+        if body.hasSuffix("|") { body.removeLast() }
+        let cells = body.split(separator: "|", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        guard cells.count >= 2 else { return nil }
+        return cells
+    }
+
+    private static func isTableSeparator(_ line: String, expectedColumns: Int) -> Bool {
+        guard let cells = parseTableRow(line), cells.count == expectedColumns else { return false }
+        return cells.allSatisfy { cell in
+            let cleaned = cell.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+            return cleaned.count >= 3 && cleaned.allSatisfy { $0 == "-" }
+        }
     }
 }
 
@@ -257,6 +315,50 @@ struct ChatMarkdownView: View, Equatable {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(elevated, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(line, lineWidth: 1)
+            }
+
+        case .rule:
+            Rectangle()
+                .fill(line)
+                .frame(height: 1)
+                .padding(.vertical, 4)
+
+        case let .table(headers, rows):
+            ScrollView(.horizontal, showsIndicators: false) {
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 0) {
+                    GridRow {
+                        ForEach(Array(headers.enumerated()), id: \.offset) { _, header in
+                            inlineText(header)
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(ink)
+                                .padding(.vertical, 7)
+                        }
+                    }
+                    Divider().gridCellUnsizedAxes(.horizontal)
+                    ForEach(Array(rows.enumerated()), id: \.offset) { rowIdx, row in
+                        GridRow {
+                            ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                                inlineText(cell)
+                                    .font(.system(size: 12.5))
+                                    .foregroundStyle(ink)
+                                    .padding(.vertical, 6)
+                            }
+                        }
+                        if rowIdx < rows.count - 1 {
+                            Rectangle()
+                                .fill(line.opacity(0.6))
+                                .frame(height: 1)
+                                .gridCellUnsizedAxes(.horizontal)
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 2)
+            }
+            .background(elevated.opacity(0.65), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .strokeBorder(line, lineWidth: 1)

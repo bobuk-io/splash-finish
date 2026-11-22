@@ -1,5 +1,7 @@
+import AppKit
 import BobukCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Text-only chat state shared by apps; the app owns the prompt and interprets complete replies.
 @MainActor @Observable public final class AgentChatSession {
@@ -17,6 +19,9 @@ import SwiftUI
         public let id = UUID()
         public let isUser: Bool
         public fileprivate(set) var text: String
+        public fileprivate(set) var thoughts: String = ""
+        public fileprivate(set) var tools: [String] = []
+        public fileprivate(set) var attachmentNames: [String] = []
     }
 
     public private(set) var phase = Phase.disconnected
@@ -26,6 +31,8 @@ import SwiftUI
     public private(set) var lastReply: String?
     public private(set) var activeTool: String?
     public private(set) var error: String?
+    public private(set) var attachments: [ACPAttachment] = []
+    public private(set) var promptHistory: [String] = []
     /// Non-nil when the agent tried to call a tool while tools were disabled and the app wants
     /// to ask the user whether to allow tools always, for this session, or not at all.
     public private(set) var pendingToolApproval: PendingToolApproval?
@@ -47,6 +54,9 @@ import SwiftUI
     @ObservationIgnored private var pendingChunks = ""
     @ObservationIgnored private var pendingReplyID: UUID?
     @ObservationIgnored private var declinedToolsInSession = false
+    @ObservationIgnored private var historyCursor: Int?
+    @ObservationIgnored private var stashedDraft = ""
+    @ObservationIgnored private var lastSentAttachments: [ACPAttachment] = []
     private var generation = 0
     private let makeClient: () throws -> ACPClient
     private let preparePrompt: (String) -> String
@@ -80,8 +90,79 @@ import SwiftUI
         self.onToolAccessChoice = onToolAccessChoice
     }
 
+    public var hasDraftContent: Bool {
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty
+    }
+
     public var canSend: Bool {
-        phase == .ready && modelProblem == nil && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard hasDraftContent else { return false }
+        if phase == .ready { return modelProblem == nil }
+        return phase == .disconnected
+    }
+
+    public var canRegenerate: Bool {
+        (phase == .ready || phase == .disconnected) && messages.contains(where: \.isUser)
+    }
+
+    public func addAttachment(_ attachment: ACPAttachment) {
+        guard attachments.count < 8 else { return }
+        attachments.append(attachment)
+    }
+
+    public func removeAttachment(id: UUID) {
+        attachments.removeAll { $0.id == id }
+    }
+
+    @discardableResult
+    public func pasteImageFromPasteboard(_ pasteboard: NSPasteboard = .general) -> Bool {
+        if let png = pasteboard.data(forType: .png),
+           let attachment = ACPAttachment.image(mimeType: "image/png", data: png, name: "Pasted Image.png") {
+            addAttachment(attachment)
+            return true
+        }
+        if let tiff = pasteboard.data(forType: .tiff),
+           let rep = NSBitmapImageRep(data: tiff),
+           let png = rep.representation(using: .png, properties: [:]),
+           let attachment = ACPAttachment.image(mimeType: "image/png", data: png, name: "Pasted Image.png") {
+            addAttachment(attachment)
+            return true
+        }
+        return false
+    }
+
+    @discardableResult
+    public func recallPreviousPrompt() -> Bool {
+        guard !promptHistory.isEmpty else { return false }
+        if historyCursor == nil {
+            guard draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+            stashedDraft = draft
+            historyCursor = promptHistory.count - 1
+        } else if let cursor = historyCursor, cursor > 0 {
+            historyCursor = cursor - 1
+        } else {
+            return false
+        }
+        if let cursor = historyCursor {
+            draft = promptHistory[cursor]
+            return true
+        }
+        return false
+    }
+
+    @discardableResult
+    public func recallNextPrompt() -> Bool {
+        guard let cursor = historyCursor else { return false }
+        if cursor + 1 < promptHistory.count {
+            let next = cursor + 1
+            historyCursor = next
+            draft = promptHistory[next]
+            return true
+        } else {
+            historyCursor = nil
+            draft = stashedDraft
+            stashedDraft = ""
+            return true
+        }
     }
 
     fileprivate var needsModelCatalog: Bool {
@@ -175,31 +256,109 @@ import SwiftUI
     }
 
     public func send() {
-        guard canSend, let client else { return }
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard canSend else { return }
+        let rawText = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = rawText.isEmpty ? "See attached files." : rawText
+        let outgoingAttachments = attachments
         let prompt = preparePrompt(text)
         guard prompt.utf8.count <= ACPClient.maxPromptBytes else {
             error = ACPError.promptTooLarge.localizedDescription
             return
         }
-        cancelIdleTimer()
-        let serial = generation
-        phase = .replying
+        if !rawText.isEmpty, promptHistory.last != rawText {
+            promptHistory.append(rawText)
+            if promptHistory.count > 50 { promptHistory.removeFirst() }
+        }
+        historyCursor = nil
+        stashedDraft = ""
+        lastSentAttachments = outgoingAttachments
+        draft = ""
+        attachments.removeAll()
         error = nil
         pendingToolApproval = nil
         lastReply = nil
-        draft = ""
-        messages.append(Message(isUser: true, text: text))
-        startReply(userText: text, prompt: prompt, client: client, serial: serial)
+        messages.append(Message(isUser: true, text: text, attachmentNames: outgoingAttachments.map(\.name)))
+
+        if phase == .ready, let client {
+            cancelIdleTimer()
+            phase = .replying
+            startReply(userText: text, prompt: prompt, attachments: outgoingAttachments, client: client, serial: generation)
+        } else if phase == .disconnected {
+            connectAndSend(userText: text, prompt: prompt, attachments: outgoingAttachments)
+        }
     }
 
-    private func startReply(userText: String, prompt: String, client: ACPClient, serial: Int) {
+    /// Re-sends the last user message (removing the previous assistant reply if present).
+    public func regenerate() {
+        guard canRegenerate else { return }
+        guard let lastUserIndex = messages.lastIndex(where: \.isUser) else { return }
+        let userText = messages[lastUserIndex].text
+        if lastUserIndex + 1 < messages.count {
+            messages.removeSubrange((lastUserIndex + 1)...)
+        }
+        let prompt = preparePrompt(userText)
+        let outgoingAttachments = lastSentAttachments
+        error = nil
+        pendingToolApproval = nil
+        lastReply = nil
+        if phase == .ready, let client {
+            cancelIdleTimer()
+            phase = .replying
+            startReply(userText: userText, prompt: prompt, attachments: outgoingAttachments, client: client, serial: generation)
+        } else if phase == .disconnected {
+            connectAndSend(userText: userText, prompt: prompt, attachments: outgoingAttachments)
+        }
+    }
+
+    private func connectAndSend(userText: String, prompt: String, attachments: [ACPAttachment]) {
+        cancelIdleTimer()
+        disconnectedForInactivity = false
+        phase = .connecting
+        generation += 1
+        let serial = generation
+        do {
+            let newClient = try makeClient()
+            self.client = newClient
+            Task {
+                do {
+                    var models = try await newClient.connect(
+                        onModels: { [weak self] models in await self?.update(models, serial: serial) },
+                        onEfforts: { [weak self] efforts in await self?.updateEfforts(efforts, serial: serial) }
+                    )
+                    if let initialModel, !initialModel.isEmpty {
+                        models = try await newClient.selectModel(initialModel)
+                    }
+                    if let initialEffort, !initialEffort.isEmpty {
+                        _ = try await newClient.selectEffort(initialEffort)
+                    }
+                    let efforts = await newClient.effortOptions()
+                    guard serial == generation else { return }
+                    self.models = models
+                    self.efforts = efforts
+                    if modelProblem != nil {
+                        phase = .ready
+                        rescheduleIdleTimer()
+                        return
+                    }
+                    phase = .replying
+                    startReply(userText: userText, prompt: prompt, attachments: attachments, client: newClient, serial: serial)
+                } catch { await failed(error, serial: serial) }
+            }
+        } catch {
+            phase = .disconnected
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func startReply(userText: String, prompt: String, attachments: [ACPAttachment] = [], client: ACPClient, serial: Int) {
         messages.append(Message(isUser: false, text: ""))
         let replyID = messages[messages.count - 1].id
         replyTask = Task {
             do {
-                let reason = try await client.prompt(prompt, onTool: { [weak self] tool in
-                    await self?.setActiveTool(tool, serial: serial)
+                let reason = try await client.prompt(prompt, attachments: attachments, onTool: { [weak self] tool in
+                    await self?.setActiveTool(tool, for: replyID, serial: serial)
+                }, onThought: { [weak self] thought in
+                    await self?.appendThought(thought, to: replyID, serial: serial)
                 }, onChunk: { [weak self] chunk in
                     await self?.append(chunk, to: replyID, serial: serial)
                 })
@@ -293,7 +452,10 @@ import SwiftUI
             do {
                 let nextClient = try makeClient()
                 self.client = nextClient
-                var models = try await nextClient.connect { [weak self] models in await self?.update(models, serial: serial) }
+                var models = try await nextClient.connect(
+                    onModels: { [weak self] models in await self?.update(models, serial: serial) },
+                    onEfforts: { [weak self] efforts in await self?.updateEfforts(efforts, serial: serial) }
+                )
                 if let initialModel, !initialModel.isEmpty {
                     models = try await nextClient.selectModel(initialModel)
                 }
@@ -385,6 +547,10 @@ import SwiftUI
         flushTask = nil
         pendingChunks.removeAll(keepingCapacity: false)
         pendingReplyID = nil
+        attachments.removeAll()
+        historyCursor = nil
+        stashedDraft = ""
+        lastSentAttachments.removeAll()
         let old = client
         client = nil
         models = nil
@@ -431,8 +597,19 @@ import SwiftUI
         await idleClient?.close()
     }
 
-    private func setActiveTool(_ tool: String?, serial: Int) {
-        if serial == generation { activeTool = tool }
+    private func setActiveTool(_ tool: String?, for id: UUID, serial: Int) {
+        guard serial == generation else { return }
+        activeTool = tool
+        if let tool, !tool.isEmpty, messages.last?.id == id {
+            if messages[messages.count - 1].tools.last != tool {
+                messages[messages.count - 1].tools.append(tool)
+            }
+        }
+    }
+
+    private func appendThought(_ delta: String, to id: UUID, serial: Int) {
+        guard serial == generation, phase == .replying, messages.last?.id == id else { return }
+        messages[messages.count - 1].thoughts += delta
     }
 
     private func update(_ models: ACPModels?, serial: Int) {
@@ -551,7 +728,9 @@ public struct AgentChatView: View {
     @FocusState private var composerFocused: Bool
     @State private var copiedMessageID: UUID?
     @State private var hoveredMessageID: UUID?
+    @State private var expandedActivityIDs: Set<UUID> = []
     @State private var autoScrollPinned = true
+    @State private var isDropTargeted = false
     @State private var agentStatuses: [ACPAgentStatus] = []
     @State private var installingAdapterForID: String?
     @State private var adapterInstallError: String?
@@ -814,15 +993,38 @@ public struct AgentChatView: View {
                 }
             }
 
-            if #available(macOS 15.0, *) {
-                scroll.onScrollGeometryChange(for: Bool.self) { geo in
-                    let distanceFromBottom = geo.contentSize.height - (geo.contentOffset.y + geo.visibleRect.height)
-                    return distanceFromBottom <= 48
-                } action: { _, nearBottom in
-                    autoScrollPinned = nearBottom
+            ZStack(alignment: .bottomTrailing) {
+                if #available(macOS 15.0, *) {
+                    scroll.onScrollGeometryChange(for: Bool.self) { geo in
+                        let distanceFromBottom = geo.contentSize.height - (geo.contentOffset.y + geo.visibleRect.height)
+                        return distanceFromBottom <= 48
+                    } action: { _, nearBottom in
+                        autoScrollPinned = nearBottom
+                    }
+                } else {
+                    scroll
                 }
-            } else {
-                scroll
+
+                if !autoScrollPinned {
+                    Button {
+                        autoScrollPinned = true
+                        withAnimation(.snappy(duration: 0.18)) {
+                            reader.scrollTo("chat-end", anchor: .bottom)
+                        }
+                    } label: {
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(colors.ink)
+                            .frame(width: 28, height: 28)
+                            .background(colors.elevated, in: Circle())
+                            .overlay { Circle().strokeBorder(colors.stroke, lineWidth: 1) }
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 18)
+                    .padding(.bottom, 10)
+                    .help("Jump to bottom")
+                    .accessibilityLabel("Jump to bottom")
+                }
             }
         }
     }
@@ -840,23 +1042,42 @@ public struct AgentChatView: View {
     private func userTurn(_ message: AgentChatSession.Message) -> some View {
         HStack(spacing: 0) {
             VStack(alignment: .trailing, spacing: 4) {
-                Text(message.text)
-                    .font(.system(size: 13.5))
-                    .lineSpacing(3.5)
-                    .foregroundStyle(colors.ink)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 13)
-                    .padding(.vertical, 9)
-                    .background(colors.elevated, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(colors.line, lineWidth: 1)
+                VStack(alignment: .leading, spacing: 6) {
+                    if !message.attachmentNames.isEmpty {
+                        HStack(spacing: 6) {
+                            ForEach(message.attachmentNames, id: \.self) { name in
+                                HStack(spacing: 4) {
+                                    Image(systemName: "paperclip")
+                                        .font(.system(size: 10))
+                                    Text(name)
+                                        .font(.system(size: 11))
+                                        .lineLimit(1)
+                                }
+                                .foregroundStyle(colors.muted)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 2)
+                                .background(colors.panel.opacity(0.7), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                            }
+                        }
                     }
-                    .onTapGesture(count: 2) { copyRawMarkdown(message) }
-                    .contextMenu {
-                        Button("Copy Markdown") { copyRawMarkdown(message) }
-                    }
-                    .help("Double-click to copy raw Markdown")
+                    Text(message.text)
+                        .font(.system(size: 13.5))
+                        .lineSpacing(3.5)
+                        .foregroundStyle(colors.ink)
+                        .textSelection(.enabled)
+                }
+                .padding(.horizontal, 13)
+                .padding(.vertical, 9)
+                .background(colors.elevated, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(colors.line, lineWidth: 1)
+                }
+                .onTapGesture(count: 2) { copyRawMarkdown(message) }
+                .contextMenu {
+                    Button("Copy Markdown") { copyRawMarkdown(message) }
+                }
+                .help("Double-click to copy raw Markdown")
 
                 if copiedMessageID == message.id {
                     copiedPill
@@ -873,7 +1094,12 @@ public struct AgentChatView: View {
     }
 
     private func assistantTurn(_ message: AgentChatSession.Message, streaming: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let isLastAssistant = message.id == session.messages.last(where: { !$0.isUser })?.id
+        return VStack(alignment: .leading, spacing: 8) {
+            if !message.tools.isEmpty || !message.thoughts.isEmpty {
+                activityDisclosure(for: message)
+            }
+
             if message.text.isEmpty {
                 Text("…")
                     .font(.system(size: 13.5))
@@ -901,7 +1127,24 @@ public struct AgentChatView: View {
             } else if copiedMessageID == message.id {
                 copiedPill
             } else if hoveredMessageID == message.id, !message.text.isEmpty {
-                hoverCopyButton(message)
+                HStack(spacing: 6) {
+                    hoverCopyButton(message)
+                    if isLastAssistant, session.canRegenerate {
+                        Button { session.regenerate() } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 9.5))
+                                Text("Regenerate")
+                                    .font(.system(size: 10.5, weight: .medium))
+                            }
+                            .foregroundStyle(colors.muted)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(colors.elevated, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
             }
         }
         .padding(.leading, 2)
@@ -914,8 +1157,70 @@ public struct AgentChatView: View {
         .onTapGesture(count: 2) { copyRawMarkdown(message) }
         .contextMenu {
             Button("Copy Markdown") { copyRawMarkdown(message) }
+            if isLastAssistant, session.canRegenerate {
+                Button("Regenerate") { session.regenerate() }
+            }
         }
         .help("Double-click to copy raw Markdown")
+    }
+
+    private func activityDisclosure(for message: AgentChatSession.Message) -> some View {
+        let isExpanded = expandedActivityIDs.contains(message.id)
+        let parts: [String] = [
+            message.tools.isEmpty ? nil : (message.tools.count == 1 ? "1 tool" : "\(message.tools.count) tools"),
+            message.thoughts.isEmpty ? nil : "Thought",
+        ].compactMap { $0 }
+        let summary = parts.joined(separator: " · ")
+
+        return VStack(alignment: .leading, spacing: 6) {
+            Button {
+                if isExpanded { expandedActivityIDs.remove(message.id) }
+                else { expandedActivityIDs.insert(message.id) }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text(summary)
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundStyle(colors.muted)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(colors.elevated, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    if !message.tools.isEmpty {
+                        ForEach(Array(message.tools.enumerated()), id: \.offset) { _, tool in
+                            HStack(spacing: 6) {
+                                Image(systemName: "wrench")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(colors.accent)
+                                Text(tool)
+                                    .font(.system(size: 11.5, design: .monospaced))
+                                    .foregroundStyle(colors.muted)
+                            }
+                        }
+                    }
+                    if !message.thoughts.isEmpty {
+                        Text(message.thoughts)
+                            .font(.system(size: 11.5))
+                            .lineSpacing(3)
+                            .foregroundStyle(colors.muted)
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding(9)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(colors.elevated.opacity(0.55), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .strokeBorder(colors.line, lineWidth: 1)
+                }
+            }
+        }
     }
 
     private func hoverCopyButton(_ message: AgentChatSession.Message) -> some View {
@@ -1115,15 +1420,57 @@ public struct AgentChatView: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if !session.attachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(session.attachments) { item in
+                            HStack(spacing: 5) {
+                                Image(systemName: item.isImage ? "photo" : "doc")
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(colors.accent)
+                                Text(item.name)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(colors.ink)
+                                    .lineLimit(1)
+                                Button {
+                                    session.removeAttachment(id: item.id)
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 8.5, weight: .semibold))
+                                        .foregroundStyle(colors.muted)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Remove \(item.name)")
+                            }
+                            .padding(.horizontal, 8)
+                            .frame(height: 24)
+                            .background(colors.elevated, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .strokeBorder(colors.line, lineWidth: 1)
+                            }
+                        }
+                    }
+                }
+            }
+
             TextField(isStreaming ? "Waiting for reply…" : placeholder, text: $session.draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13.5))
                 .lineLimit(1...5)
                 .focused($composerFocused)
                 .frame(maxWidth: .infinity, minHeight: 22, alignment: .topLeading)
+                .onKeyPress(.upArrow) {
+                    session.recallPreviousPrompt() ? .handled : .ignored
+                }
+                .onKeyPress(.downArrow) {
+                    session.recallNextPrompt() ? .handled : .ignored
+                }
 
             HStack(spacing: 8) {
                 agentModelControl
+
+                attachControl
 
                 if let workingDirectory {
                     HStack(spacing: 4) {
@@ -1155,8 +1502,58 @@ public struct AgentChatView: View {
         .background(colors.field, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(session.canSend ? colors.accent.opacity(0.55) : colors.stroke, lineWidth: 1)
+                .strokeBorder(isDropTargeted ? colors.accent : (session.canSend ? colors.accent.opacity(0.55) : colors.stroke), lineWidth: isDropTargeted ? 1.5 : 1)
         }
+        .dropDestination(for: URL.self) { urls, _ in
+            for url in urls {
+                if let ext = url.pathExtension.lowercased() as String?,
+                   ["png", "jpg", "jpeg", "webp"].contains(ext),
+                   let data = try? Data(contentsOf: url),
+                   let image = ACPAttachment.image(mimeType: ext == "png" ? "image/png" : "image/jpeg", data: data, name: url.lastPathComponent) {
+                    session.addAttachment(image)
+                } else {
+                    session.addAttachment(.file(url: url))
+                }
+            }
+            return !urls.isEmpty
+        } isTargeted: { targeted in
+            isDropTargeted = targeted
+        }
+    }
+
+    private var attachControl: some View {
+        Menu {
+            Button("Attach File…") {
+                let panel = NSOpenPanel()
+                panel.canChooseFiles = true
+                panel.canChooseDirectories = false
+                panel.allowsMultipleSelection = true
+                if panel.runModal() == .OK {
+                    for url in panel.urls {
+                        let ext = url.pathExtension.lowercased()
+                        if ["png", "jpg", "jpeg", "webp"].contains(ext),
+                           let data = try? Data(contentsOf: url),
+                           let image = ACPAttachment.image(mimeType: ext == "png" ? "image/png" : "image/jpeg", data: data, name: url.lastPathComponent) {
+                            session.addAttachment(image)
+                        } else {
+                            session.addAttachment(.file(url: url))
+                        }
+                    }
+                }
+            }
+            Button("Paste Image from Clipboard") {
+                _ = session.pasteImageFromPasteboard()
+            }
+        } label: {
+            Image(systemName: "paperclip")
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(colors.muted)
+                .frame(width: 24, height: 24)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Attach file or paste image (or drag & drop here)")
+        .accessibilityLabel("Attach file or image")
     }
 
     private var activeAgentName: String {
@@ -1368,8 +1765,27 @@ public struct AgentChatView: View {
     @ViewBuilder private var composerAction: some View {
         switch session.phase {
         case .disconnected:
-            Button("Connect") { session.connect() }
-                .buttonStyle(QuietButtonStyle(palette: colors.palette, prominent: true, height: 26))
+            if session.hasDraftContent, selectedAgentMissingAdapter == nil {
+                Text("⌘↩")
+                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(colors.muted.opacity(0.85))
+                Button { session.send() } label: {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(colors.accent)
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(colors.keyInk)
+                    }
+                    .frame(width: 26, height: 26)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.return, modifiers: .command)
+                .accessibilityLabel("Connect and send message")
+            } else {
+                Button("Connect") { session.connect() }
+                    .buttonStyle(QuietButtonStyle(palette: colors.palette, prominent: true, height: 26))
+            }
         case .connecting:
             ProgressView().controlSize(.small)
             Button("Cancel") { session.disconnect() }

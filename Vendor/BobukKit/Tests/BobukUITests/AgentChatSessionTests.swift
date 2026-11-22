@@ -33,6 +33,89 @@ import Testing
             .code(language: "swift", code: "let x = 1"),
         ])
     }
+
+    @Test func markdownParserHandlesTablesAndHorizontalRules() {
+        let raw = """
+        ---
+
+        | Agent | Status |
+        | --- | --- |
+        | Antigravity | Ready |
+        | Kimi | Ready |
+        """
+        let blocks = ChatMarkdownBlock.parse(raw)
+        #expect(blocks == [
+            .rule,
+            .table(headers: ["Agent", "Status"], rows: [["Antigravity", "Ready"], ["Kimi", "Ready"]]),
+        ])
+    }
+
+    @Test func autoConnectsOnSendAndSupportsHistoryAndRegenerate() async throws {
+        let dir = try TemporaryDirectory(prefix: "acp-autoconnect-test")
+        defer { dir.remove() }
+        let script = #"""
+        set -eu
+        IFS= read -r line
+        printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+        IFS= read -r line
+        printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"ac"}}'
+        for id in 3 4; do
+            IFS= read -r line || break
+            printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ac","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Plan"}}}}'
+            printf '%s\n' "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"ac\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"Reply $id\"}}}}"
+            printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"stopReason\":\"end_turn\"}}"
+        done
+        IFS= read -r line || true
+        """#
+        let chat = AgentChatSession(makeClient: {
+            ACPClient(launch: .init(
+                executable: URL(fileURLWithPath: "/bin/bash"),
+                arguments: ["-c", script],
+                directory: dir.url,
+                environment: ["PATH": "/usr/bin:/bin"],
+                clientName: "test",
+                isolation: .unrestricted
+            ), requestTimeout: .seconds(2), turnTimeout: .seconds(2))
+        })
+
+        // Send directly from .disconnected without calling connect() first:
+        chat.draft = "First question"
+        #expect(chat.canSend)
+        chat.send()
+        for _ in 0..<250 where chat.phase != .ready { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(chat.phase == .ready)
+        #expect(chat.messages.last?.text == "Reply 3")
+        #expect(chat.messages.last?.thoughts == "Plan")
+
+        // Input history recall (↑ / ↓):
+        #expect(chat.recallPreviousPrompt())
+        #expect(chat.draft == "First question")
+        #expect(chat.recallNextPrompt())
+        #expect(chat.draft.isEmpty)
+
+        // Regenerate last reply:
+        #expect(chat.canRegenerate)
+        chat.regenerate()
+        for _ in 0..<250 where chat.phase != .ready { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(chat.phase == .ready)
+        #expect(chat.messages.count == 2)
+        #expect(chat.messages.last?.text == "Reply 4")
+        await chat.shutdown()
+    }
+
+    @Test func preferencesPersistAcrossLaunches() {
+        let (defaults, suite) = IsolatedDefaults.make()
+        defer { IsolatedDefaults.remove(suite) }
+        let prefs = AgentChatPreferences(defaults: defaults, defaultAgent: .antigravity)
+        prefs.agent = .kimi
+        prefs.model = "kimi-k3"
+        prefs.effort = "high"
+
+        let reloaded = AgentChatPreferences(defaults: defaults, defaultAgent: .antigravity)
+        #expect(reloaded.agent == .kimi)
+        #expect(reloaded.model == "kimi-k3")
+        #expect(reloaded.effort == "high")
+    }
     @Test(arguments: [true, false]) func modelCatalogRequirement(_ required: Bool) async throws {
         let dir = try TemporaryDirectory(prefix: "acp-no-models")
         defer { dir.remove() }

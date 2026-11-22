@@ -99,6 +99,76 @@ public struct ACPModels: Equatable, Sendable {
     }
 }
 
+/// An attachment included in an ACP `session/prompt` turn (image or file reference).
+public struct ACPAttachment: Identifiable, Equatable, Sendable {
+    public enum Kind: Equatable, Sendable {
+        case image(mimeType: String, data: Data)
+        case file(url: URL, textPreview: String?)
+    }
+
+    public static let maxImageBytes = 5_242_880
+    public static let maxFilePreviewBytes = 65_536
+
+    public let id: UUID
+    public let name: String
+    public let kind: Kind
+
+    public var isImage: Bool {
+        if case .image = kind { return true }
+        return false
+    }
+
+    public init(id: UUID = UUID(), name: String, kind: Kind) {
+        self.id = id
+        self.name = name
+        self.kind = kind
+    }
+
+    public static func image(mimeType: String = "image/png", data: Data, name: String = "Image.png") -> ACPAttachment? {
+        guard !data.isEmpty, data.count <= maxImageBytes else { return nil }
+        return ACPAttachment(name: name, kind: .image(mimeType: mimeType, data: data))
+    }
+
+    public static func file(url: URL) -> ACPAttachment {
+        let name = url.lastPathComponent.isEmpty ? url.path : url.lastPathComponent
+        var preview: String?
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let size = attrs[.size] as? Int, size > 0, size <= maxFilePreviewBytes,
+           let data = try? Data(contentsOf: url),
+           !data.contains(0),
+           let text = String(data: data, encoding: .utf8) {
+            preview = text
+        }
+        return ACPAttachment(name: name, kind: .file(url: url, textPreview: preview))
+    }
+
+    fileprivate func acpContentBlock() -> [String: Any] {
+        switch kind {
+        case let .image(mimeType, data):
+            return [
+                "type": "image",
+                "mimeType": mimeType,
+                "data": data.base64EncodedString(),
+            ]
+        case let .file(url, textPreview):
+            if let textPreview {
+                return [
+                    "type": "resource",
+                    "resource": [
+                        "uri": url.absoluteString,
+                        "mimeType": "text/plain",
+                        "text": textPreview,
+                    ],
+                ]
+            }
+            return [
+                "type": "text",
+                "text": "Attached file: \(url.path)",
+            ]
+        }
+    }
+}
+
 /// Options for a headless one-shot ACP call (`ACPAgentPreset.ask(...)`).
 public struct ACPPromptOptions: Equatable, Sendable {
     /// Model ID, display name, or case-insensitive substring (e.g. `"gemini-3.8-flash"` or `"sonnet"`).
@@ -201,8 +271,10 @@ public actor ACPClient {
     private var effortUpdates: (@Sendable (ACPModels?) async -> Void)?
     private var ownsProcessGroup = false
     private var chunks: (@Sendable (String) async -> Void)?
+    private var thoughts: (@Sendable (String) async -> Void)?
     private var toolStatuses: (@Sendable (String?) async -> Void)?
     private var replyBytes = 0
+    private var thoughtBytes = 0
     private var stopping = false
     private var closed = false
 
@@ -291,7 +363,9 @@ public actor ACPClient {
 
     public func prompt(
         _ text: String,
+        attachments: [ACPAttachment] = [],
         onTool: (@Sendable (String?) async -> Void)? = nil,
+        onThought: (@Sendable (String) async -> Void)? = nil,
         onChunk: @escaping @Sendable (String) async -> Void
     ) async throws -> String {
         try Task.checkCancellation()
@@ -299,17 +373,24 @@ public actor ACPClient {
         guard pending == nil, chunks == nil else { throw ACPError.busy }
         guard text.utf8.count <= Self.maxPromptBytes else { throw ACPError.promptTooLarge }
         chunks = onChunk
+        thoughts = onThought
         toolStatuses = onTool
         replyBytes = 0
+        thoughtBytes = 0
         stopping = false
         defer {
             chunks = nil
+            thoughts = nil
             toolStatuses = nil
             stopping = false
         }
+        var blocks: [Object] = [["type": "text", "text": text]]
+        for attachment in attachments {
+            blocks.append(attachment.acpContentBlock())
+        }
         let result = try await request(
             "session/prompt",
-            params: ["sessionId": session, "prompt": [["type": "text", "text": text]]],
+            params: ["sessionId": session, "prompt": blocks],
             timeout: turnTimeout
         )
         if stopping { return "cancelled" }
@@ -612,6 +693,14 @@ public actor ACPClient {
                     replyBytes += text.utf8.count
                     guard replyBytes <= Self.maxReplyBytes else { disconnect(.outputTooLarge); return }
                     await chunks(text)
+                }
+            case "agent_thought_chunk":
+                if !stopping, let thoughts, let content = update["content"] as? Object,
+                   content["type"] as? String == "text", let text = content["text"] as? String {
+                    thoughtBytes += text.utf8.count
+                    if thoughtBytes <= Self.maxReplyBytes {
+                        await thoughts(text)
+                    }
                 }
             case "tool_call", "tool_call_update":
                 let status = update["status"] as? String

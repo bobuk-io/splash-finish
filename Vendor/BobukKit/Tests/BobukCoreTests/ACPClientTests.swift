@@ -158,6 +158,50 @@ import Testing
         await agent.close()
     }
 
+    @Test func forwardsThoughtsAndAttachmentsInPrompt() async throws {
+        let dir = try TemporaryDirectory(prefix: "acp-thoughts-attach")
+        defer { dir.remove() }
+        let note = dir.url.appendingPathComponent("note.txt")
+        try Data("hello file".utf8).write(to: note)
+        let image = try #require(ACPAttachment.image(mimeType: "image/png", data: Data([0x89, 0x50, 0x4E, 0x47]), name: "shot.png"))
+        let file = ACPAttachment.file(url: note)
+
+        let script = #"""
+        set -eu
+        IFS= read -r line
+        printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+        IFS= read -r line
+        printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"att"}}'
+        IFS= read -r line
+        [[ "$line" == *'"type":"image"'* && "$line" == *'"type":"resource"'* && "$line" == *'hello file'* ]] || exit 31
+        printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"att","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Thinking..."}}}}'
+        printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"att","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Got both attachments"}}}}'
+        printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
+        IFS= read -r line || true
+        """#
+        let agent = ACPClient(launch: ACPLaunchConfiguration(
+            executable: URL(fileURLWithPath: "/bin/bash"),
+            arguments: ["-c", script],
+            directory: dir.url,
+            environment: ["PATH": "/usr/bin:/bin"],
+            clientName: "fixture",
+            isolation: .unrestricted
+        ), requestTimeout: .seconds(3), turnTimeout: .seconds(3))
+        _ = try await agent.connect()
+        let thoughts = Transcript()
+        let reply = Transcript()
+        let reason = try await agent.prompt(
+            "Inspect these",
+            attachments: [image, file],
+            onThought: { await thoughts.append($0) },
+            onChunk: { await reply.append($0) }
+        )
+        #expect(reason == "end_turn")
+        #expect(await thoughts.text == "Thinking...")
+        #expect(await reply.text == "Got both attachments")
+        await agent.close()
+    }
+
     @Test func allowsToolsWithoutFilesystemAccess() async throws {
         let dir = try TemporaryDirectory(prefix: "acp-tools-only")
         defer { dir.remove() }
