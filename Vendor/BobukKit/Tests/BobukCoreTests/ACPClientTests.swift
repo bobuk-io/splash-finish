@@ -124,4 +124,88 @@ import Testing
         _ = try await agent.connect()
         await #expect(throws: ACPError.unexpectedTool) { _ = try await agent.prompt("A prompt") { _ in } }
     }
+
+    @Test func sendsLargePromptBeyondPipeBufferWithoutEAGAINFailure() async throws {
+        let dir = try TemporaryDirectory(prefix: "acp-large-prompt")
+        defer { dir.remove() }
+        let script = #"""
+        set -eu
+        IFS= read -r line
+        printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+        IFS= read -r line
+        printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"big"}}'
+        IFS= read -r line
+        bytes=${#line}
+        printf '%s\n' "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"big\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"$bytes\"}}}}"
+        printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
+        IFS= read -r line || true
+        """#
+        let agent = ACPClient(launch: ACPLaunchConfiguration(
+            executable: URL(fileURLWithPath: "/bin/bash"),
+            arguments: ["-c", script],
+            directory: dir.url,
+            environment: ["PATH": "/usr/bin:/bin"],
+            clientName: "fixture",
+            isolation: .unrestricted
+        ), requestTimeout: .seconds(3), turnTimeout: .seconds(3))
+        _ = try await agent.connect()
+        let largePrompt = String(repeating: "a", count: 28_000)
+        let transcript = Transcript()
+        let reason = try await agent.prompt(largePrompt) { await transcript.append($0) }
+        #expect(reason == "end_turn")
+        let receivedBytes = Int(await transcript.text) ?? 0
+        #expect(receivedBytes > 28_000)
+        await agent.close()
+    }
+
+    @Test func allowsToolsWithoutFilesystemAccess() async throws {
+        let dir = try TemporaryDirectory(prefix: "acp-tools-only")
+        defer { dir.remove() }
+        let script = #"""
+        set -eu
+        IFS= read -r line
+        [[ "$line" == *'"clientCapabilities":{}'* ]] || exit 10
+        printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+        IFS= read -r line
+        printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"tools-demo"}}'
+        IFS= read -r line
+        printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"tools-demo","update":{"sessionUpdate":"tool_call","title":"web_search","status":"in_progress"}}}'
+        printf '%s\n' '{"jsonrpc":"2.0","id":"perm-1","method":"session/request_permission","params":{"sessionId":"tools-demo","options":[{"optionId":"opt-allow","kind":"allow_once","name":"Allow"}]}}'
+        IFS= read -r line
+        [[ "$line" == *'"perm-1"'* && "$line" == *'"opt-allow"'* ]] || exit 11
+        printf '%s\n' '{"jsonrpc":"2.0","id":"fs-1","method":"fs/read_text_file","params":{"sessionId":"tools-demo","path":"/etc/hosts"}}'
+        IFS= read -r line
+        [[ "$line" == *'"fs-1"'* && "$line" == *'-32601'* ]] || exit 12
+        printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"tools-demo","update":{"sessionUpdate":"tool_call_update","status":"completed"}}}'
+        printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"tools-demo","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Found via web_search"}}}}'
+        printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
+        IFS= read -r line || true
+        """#
+        let client = ACPClient(
+            launch: ACPLaunchConfiguration(
+                executable: URL(fileURLWithPath: "/bin/bash"),
+                arguments: ["-c", script],
+                directory: dir.url,
+                environment: ["PATH": "/usr/bin:/bin"],
+                clientName: "fixture",
+                isolation: .unrestricted,
+                access: .tools(autoApproveTools: true)
+            ),
+            requestTimeout: .seconds(2),
+            turnTimeout: .seconds(2)
+        )
+        _ = try await client.connect()
+        actor Collector {
+            var tools: [String?] = []
+            var text = ""
+            func addTool(_ t: String?) { tools.append(t) }
+            func addText(_ s: String) { text += s }
+        }
+        let collector = Collector()
+        let reason = try await client.prompt("Search news", onTool: { await collector.addTool($0) }, onChunk: { await collector.addText($0) })
+        #expect(reason == "end_turn")
+        #expect(await collector.tools == ["web_search", nil])
+        #expect(await collector.text == "Found via web_search")
+        await client.close()
+    }
 }

@@ -820,36 +820,40 @@ public struct ACPAgentPreset: Codable, Equatable, Hashable, Identifiable, Sendab
             requestTimeout: options.requestTimeout,
             turnTimeout: options.turnTimeout
         )
-        defer { Task { await client.close() } }
 
-        var activeModels = try await client.connect()
-        if let model = options.model, !model.isEmpty {
-            activeModels = try await client.selectModel(model)
-        }
-        var activeEffort = await client.currentEffort()
-        if let effort = options.effort, !effort.isEmpty {
-            if let updated = try await client.selectEffort(effort) {
-                activeEffort = updated
+        do {
+            var activeModels = try await client.connect()
+            if let model = options.model, !model.isEmpty {
+                activeModels = try await client.selectModel(model)
             }
-        }
+            var activeEffort = await client.currentEffort()
+            if let effort = options.effort, !effort.isEmpty {
+                if let updated = try await client.selectEffort(effort) {
+                    activeEffort = updated
+                }
+            }
 
-        actor Collector {
-            var text = ""
-            func append(_ chunk: String) { text += chunk }
+            actor Collector {
+                var text = ""
+                func append(_ chunk: String) { text += chunk }
+            }
+            let collector = Collector()
+            let reason = try await client.prompt(prompt, onTool: onTool) { chunk in
+                await collector.append(chunk)
+                await onChunk?(chunk)
+            }
+            let reply = await collector.text
+            await client.close()
+            return ACPPromptResponse(
+                text: reply,
+                stopReason: reason,
+                model: activeModels?.current,
+                effort: activeEffort
+            )
+        } catch {
+            await client.close()
+            throw error
         }
-        let collector = Collector()
-        let reason = try await client.prompt(prompt, onTool: onTool) { chunk in
-            await collector.append(chunk)
-            await onChunk?(chunk)
-        }
-        let reply = await collector.text
-        await client.close()
-        return ACPPromptResponse(
-            text: reply,
-            stopReason: reason,
-            model: activeModels?.current,
-            effort: activeEffort
-        )
     }
 
     /// Convenience one-shot call using the first auto-detected installed agent.
@@ -930,7 +934,7 @@ public struct ACPAgentPreset: Codable, Equatable, Hashable, Identifiable, Sendab
 
         let canWriteWorkspace: Bool = {
             switch access {
-            case .textOnly: return false
+            case .textOnly, .tools: return false
             case let .workspace(allowWrite, _, _): return allowWrite
             }
         }()
@@ -947,8 +951,11 @@ public struct ACPAgentPreset: Codable, Equatable, Hashable, Identifiable, Sendab
 
         var allowWriteClauses = writableSubpaths.map { "(subpath \(Self.quoted($0)))" }
             + ["(literal \"/dev/null\")", "(literal \"/dev/tty\")"]
-        if case .workspace = access {
-            // Allow workspace agents to allocate PTYs when running shell tools (e.g. validation CLIs).
+        switch access {
+        case .textOnly:
+            break
+        case .tools, .workspace:
+            // Allow tool-enabled agents to allocate PTYs when running built-in or workspace tools.
             allowWriteClauses.append(contentsOf: [
                 "(literal \"/dev/ptmx\")",
                 "(regex #\"^/dev/ttys[0-9]+$\")",
@@ -966,7 +973,7 @@ public struct ACPAgentPreset: Codable, Equatable, Hashable, Identifiable, Sendab
 
     private static func additionalRoots(from access: ACPAccessPolicy) -> [URL] {
         switch access {
-        case .textOnly: return []
+        case .textOnly, .tools: return []
         case let .workspace(_, _, additionalRoots): return additionalRoots
         }
     }

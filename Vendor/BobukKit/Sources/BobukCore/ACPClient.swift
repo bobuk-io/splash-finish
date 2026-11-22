@@ -15,6 +15,9 @@ public enum ACPAccessPolicy: Equatable, Sendable {
     /// Pure text chat: advertises no filesystem/terminal capabilities, cancels permission requests,
     /// and disconnects if the agent executes a tool call.
     case textOnly
+    /// Built-in agent tools (such as web search) are permitted without exposing host filesystem
+    /// capabilities (`fs.readTextFile` / `fs.writeTextFile`).
+    case tools(autoApproveTools: Bool = true)
     /// Workspace-enabled agent: opens the session in `ACPLaunchConfiguration.directory`,
     /// advertises `fs.readTextFile` (and `fs.writeTextFile` when `allowWrite` is true) scoped to
     /// `ACPLaunchConfiguration.directory` plus `additionalRoots`, permits tool call updates, and
@@ -195,6 +198,8 @@ public actor ACPClient {
     private var models: ACPModels?
     private var efforts: ACPModels?
     private var modelUpdates: (@Sendable (ACPModels?) async -> Void)?
+    private var effortUpdates: (@Sendable (ACPModels?) async -> Void)?
+    private var ownsProcessGroup = false
     private var chunks: (@Sendable (String) async -> Void)?
     private var toolStatuses: (@Sendable (String?) async -> Void)?
     private var replyBytes = 0
@@ -208,7 +213,10 @@ public actor ACPClient {
         self.turnTimeout = turnTimeout
     }
 
-    public func connect(onModels: (@Sendable (ACPModels?) async -> Void)? = nil) async throws -> ACPModels? {
+    public func connect(
+        onModels: (@Sendable (ACPModels?) async -> Void)? = nil,
+        onEfforts: (@Sendable (ACPModels?) async -> Void)? = nil
+    ) async throws -> ACPModels? {
         guard !closed else { throw ACPError.disconnected }
         if session != nil { return models }
         guard process == nil else { throw ACPError.busy }
@@ -229,11 +237,16 @@ public actor ACPClient {
             models = ACPModels(result)
             efforts = Self.parseEfforts(result)
             modelUpdates = onModels
+            effortUpdates = onEfforts
             return models
         } catch {
             close()
             throw error
         }
+    }
+
+    public func effortOptions() -> ACPModels? {
+        efforts
     }
 
     public func selectModel(_ value: String) async throws -> ACPModels? {
@@ -321,7 +334,7 @@ public actor ACPClient {
 
     private func clientCapabilities() -> Object {
         switch launch.access {
-        case .textOnly:
+        case .textOnly, .tools:
             return [:]
         case let .workspace(allowWrite, _, _):
             return ["fs": ["readTextFile": true, "writeTextFile": allowWrite]]
@@ -330,7 +343,7 @@ public actor ACPClient {
 
     private func allowedRoots() -> [String] {
         switch launch.access {
-        case .textOnly:
+        case .textOnly, .tools:
             return []
         case let .workspace(_, _, additionalRoots):
             return ([launch.directory] + additionalRoots).map(Self.canonicalPath)
@@ -372,7 +385,12 @@ public actor ACPClient {
                 try send(["id": id, "result": ["outcome": ["outcome": "cancelled"]]])
                 return
             }
-            if case let .workspace(_, autoApproveTools, _) = launch.access, autoApproveTools,
+            let autoApprove: Bool = switch launch.access {
+            case .textOnly: false
+            case let .tools(approve): approve
+            case let .workspace(_, approve, _): approve
+            }
+            if autoApprove,
                let options = params?["options"] as? [Object] {
                 let allowOption = options.first(where: { $0["kind"] as? String == "allow_once" })
                     ?? options.first(where: { ($0["kind"] as? String)?.hasPrefix("allow") == true })
@@ -472,6 +490,8 @@ public actor ACPClient {
         guard fcntl(writer.fileDescriptor, F_SETNOSIGPIPE, 1) != -1,
               fcntl(writer.fileDescriptor, F_SETFL, O_NONBLOCK) != -1 else { throw ACPError.startFailed }
         do { try child.run() } catch { throw ACPError.startFailed }
+        let pid = child.processIdentifier
+        ownsProcessGroup = (setpgid(pid, pid) == 0) || (getpgid(pid) == pid)
 
         let (stream, continuation) = AsyncStream<Data>.makeStream(bufferingPolicy: .bufferingOldest(128))
         let output = stdout.fileHandleForReading
@@ -523,7 +543,31 @@ public actor ACPClient {
         envelope["jsonrpc"] = "2.0"
         var data = try JSONSerialization.data(withJSONObject: envelope)
         data.append(10)
-        try input.write(contentsOf: data)
+        try writeAll(data, to: input.fileDescriptor)
+    }
+
+    /// Writes all bytes to a non-blocking pipe, waiting for writability when the pipe buffer fills
+    /// (e.g. prompts larger than macOS's 16 KiB pipe buffer).
+    private func writeAll(_ data: Data, to fd: Int32) throws {
+        try data.withUnsafeBytes { rawBuffer in
+            guard let base = rawBuffer.baseAddress else { return }
+            var written = 0
+            let total = rawBuffer.count
+            while written < total {
+                let result = Darwin.write(fd, base.advanced(by: written), total - written)
+                if result > 0 {
+                    written += result
+                    continue
+                }
+                if result == -1 && errno == EINTR { continue }
+                if result == -1 && (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                    let ready = Darwin.poll(&pfd, 1, 2_000)
+                    if ready > 0 { continue }
+                }
+                throw ACPError.disconnected
+            }
+        }
     }
 
     private func receive(_ data: Data) async {
@@ -571,14 +615,17 @@ public actor ACPClient {
                 }
             case "tool_call", "tool_call_update":
                 let status = update["status"] as? String
+                let toolTitle = (update["title"] as? String) ?? (update["name"] as? String)
                 if launch.access == .textOnly {
                     if let status, ["in_progress", "completed"].contains(status) {
+                        if let toolTitle, !toolTitle.isEmpty {
+                            await toolStatuses?(toolTitle)
+                        }
                         disconnect(.unexpectedTool)
                     }
                 } else {
                     if status == "in_progress" || status == "pending" {
-                        let title = (update["title"] as? String) ?? (update["name"] as? String) ?? "Running tool…"
-                        await toolStatuses?(title)
+                        await toolStatuses?(toolTitle ?? "Running tool…")
                     } else if status == "completed" || status == "failed" || status == "cancelled" {
                         await toolStatuses?(nil)
                     }
@@ -587,6 +634,7 @@ public actor ACPClient {
                 models = ACPModels(update) ?? models
                 efforts = Self.parseEfforts(update) ?? efforts
                 await modelUpdates?(models)
+                await effortUpdates?(efforts)
             default: break
             }
             return
@@ -616,16 +664,22 @@ public actor ACPClient {
         output = nil
         input = nil
         if let process, process.isRunning {
+            let pid = process.processIdentifier
+            let killGroup = ownsProcessGroup && getpgid(pid) == pid
+            if killGroup { kill(-pid, SIGTERM) }
             process.terminate()
             DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
-                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                if killGroup { kill(-pid, SIGKILL) }
+                if process.isRunning { kill(pid, SIGKILL) }
             }
         }
+        ownsProcessGroup = false
         process = nil
         session = nil
         models = nil
         efforts = nil
         modelUpdates = nil
+        effortUpdates = nil
         buffer.removeAll()
         if let pending {
             self.pending = nil

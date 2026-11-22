@@ -4,6 +4,15 @@ import SwiftUI
 /// Text-only chat state shared by apps; the app owns the prompt and interprets complete replies.
 @MainActor @Observable public final class AgentChatSession {
     public enum Phase: Equatable { case disconnected, connecting, ready, switching, replying, stopping }
+    public enum ToolAccessChoice: Equatable, Sendable {
+        case allowAlways
+        case allowForSession
+        case deny
+    }
+    public struct PendingToolApproval: Equatable, Sendable {
+        public let toolName: String?
+        public let promptText: String
+    }
     public struct Message: Identifiable {
         public let id = UUID()
         public let isUser: Bool
@@ -12,10 +21,14 @@ import SwiftUI
 
     public private(set) var phase = Phase.disconnected
     public private(set) var models: ACPModels?
+    public private(set) var efforts: ACPModels?
     public private(set) var messages: [Message] = []
     public private(set) var lastReply: String?
     public private(set) var activeTool: String?
     public private(set) var error: String?
+    /// Non-nil when the agent tried to call a tool while tools were disabled and the app wants
+    /// to ask the user whether to allow tools always, for this session, or not at all.
+    public private(set) var pendingToolApproval: PendingToolApproval?
     /// True when the subprocess was closed automatically after `idleTimeout` of inactivity.
     public private(set) var disconnectedForInactivity = false
     /// When set to a positive duration, closes the idle agent subprocess after that much inactivity
@@ -33,12 +46,14 @@ import SwiftUI
     @ObservationIgnored private var flushTask: Task<Void, Never>?
     @ObservationIgnored private var pendingChunks = ""
     @ObservationIgnored private var pendingReplyID: UUID?
+    @ObservationIgnored private var declinedToolsInSession = false
     private var generation = 0
     private let makeClient: () throws -> ACPClient
     private let preparePrompt: (String) -> String
     private let displayReply: (String) -> String
     private let missingModelsMessage: String?
     private let requiresModelCatalog: () -> Bool
+    private let onToolAccessChoice: ((ToolAccessChoice) -> Void)?
     public var initialModel: String?
     public var initialEffort: String?
 
@@ -46,11 +61,14 @@ import SwiftUI
     /// Pass `requiresModelCatalog` when switching between agents with different catalog behavior.
     /// Pass `initialModel` / `initialEffort` to pre-select a model and reasoning effort on connect.
     /// Pass `idleTimeout` to automatically terminate an idle agent subprocess after inactivity.
+    /// Pass `onToolAccessChoice` to show an inline Allow Always / This Session / Don't Allow prompt
+    /// the first time an agent attempts to call a tool in a text-only session.
     public init(makeClient: @escaping () throws -> ACPClient, preparePrompt: @escaping (String) -> String = { $0 },
                 displayReply: @escaping (String) -> String = { $0 }, missingModelsMessage: String? = nil,
                 requiresModelCatalog: (() -> Bool)? = nil,
                 initialModel: String? = nil, initialEffort: String? = nil,
-                idleTimeout: Duration? = nil) {
+                idleTimeout: Duration? = nil,
+                onToolAccessChoice: ((ToolAccessChoice) -> Void)? = nil) {
         self.makeClient = makeClient
         self.preparePrompt = preparePrompt
         self.displayReply = displayReply
@@ -59,6 +77,7 @@ import SwiftUI
         self.initialModel = initialModel
         self.initialEffort = initialEffort
         self.idleTimeout = idleTimeout
+        self.onToolAccessChoice = onToolAccessChoice
     }
 
     public var canSend: Bool {
@@ -88,15 +107,20 @@ import SwiftUI
             self.client = client
             Task {
                 do {
-                    var models = try await client.connect { [weak self] models in await self?.update(models, serial: serial) }
+                    var models = try await client.connect(
+                        onModels: { [weak self] models in await self?.update(models, serial: serial) },
+                        onEfforts: { [weak self] efforts in await self?.updateEfforts(efforts, serial: serial) }
+                    )
                     if let initialModel, !initialModel.isEmpty {
                         models = try await client.selectModel(initialModel)
                     }
                     if let initialEffort, !initialEffort.isEmpty {
                         _ = try await client.selectEffort(initialEffort)
                     }
+                    let efforts = await client.effortOptions()
                     guard serial == generation else { return }
                     self.models = models
+                    self.efforts = efforts
                     phase = .ready
                     rescheduleIdleTimer()
                 } catch { await failed(error, serial: serial) }
@@ -122,8 +146,28 @@ import SwiftUI
         Task {
             do {
                 let models = try await client.selectModel(id)
+                let efforts = await client.effortOptions()
                 guard serial == generation else { return }
                 self.models = models
+                self.efforts = efforts
+                phase = .ready
+                rescheduleIdleTimer()
+            } catch { await failed(error, serial: serial) }
+        }
+    }
+
+    public func selectEffort(_ id: String) {
+        guard phase == .ready, let client, id != efforts?.current else { return }
+        cancelIdleTimer()
+        let serial = generation
+        phase = .switching
+        error = nil
+        Task {
+            do {
+                _ = try await client.selectEffort(id)
+                let efforts = await client.effortOptions()
+                guard serial == generation else { return }
+                self.efforts = efforts
                 phase = .ready
                 rescheduleIdleTimer()
             } catch { await failed(error, serial: serial) }
@@ -142,9 +186,14 @@ import SwiftUI
         let serial = generation
         phase = .replying
         error = nil
+        pendingToolApproval = nil
         lastReply = nil
         draft = ""
         messages.append(Message(isUser: true, text: text))
+        startReply(userText: text, prompt: prompt, client: client, serial: serial)
+    }
+
+    private func startReply(userText: String, prompt: String, client: ACPClient, serial: Int) {
         messages.append(Message(isUser: false, text: ""))
         let replyID = messages[messages.count - 1].id
         replyTask = Task {
@@ -177,13 +226,123 @@ import SwiftUI
                 phase = .ready
                 rescheduleIdleTimer()
             } catch {
+                let observedTool = activeTool
                 if serial == generation {
                     flushChunks(serial: serial)
                     activeTool = nil
                     discardEmptyReply()
                 }
+                if let acpError = error as? ACPError,
+                   acpError == .unexpectedTool,
+                   onToolAccessChoice != nil,
+                   !declinedToolsInSession {
+                    await requestToolApproval(toolName: observedTool, promptText: userText, serial: serial)
+                } else {
+                    await failed(error, serial: serial)
+                }
+            }
+        }
+    }
+
+    private func requestToolApproval(toolName: String?, promptText: String, serial: Int) async {
+        guard serial == generation else { return }
+        cancelIdleTimer()
+        let failedClient = client
+        client = nil
+        models = nil
+        phase = .disconnected
+        disconnectedForInactivity = false
+        activeTool = nil
+        error = nil
+        pendingToolApproval = PendingToolApproval(toolName: toolName, promptText: promptText)
+        if let last = messages.last, !last.isUser {
+            messages.removeLast()
+        }
+        await failedClient?.close()
+    }
+
+    /// Resolves a pending tool-access prompt. Allowing reconnects with updated capabilities and
+    /// automatically retries the interrupted user message without duplicating it in the transcript.
+    public func resolveToolApproval(_ choice: ToolAccessChoice) {
+        guard let pending = pendingToolApproval else { return }
+        pendingToolApproval = nil
+        switch choice {
+        case .allowAlways, .allowForSession:
+            onToolAccessChoice?(choice)
+            reconnectAndRetry(userText: pending.promptText)
+        case .deny:
+            declinedToolsInSession = true
+            onToolAccessChoice?(.deny)
+            connect()
+        }
+    }
+
+    private func reconnectAndRetry(userText: String) {
+        cancelIdleTimer()
+        disconnectedForInactivity = false
+        error = nil
+        phase = .connecting
+        generation += 1
+        let serial = generation
+        let previous = client
+        client = nil
+        models = nil
+        Task {
+            await previous?.close()
+            guard serial == generation else { return }
+            do {
+                let nextClient = try makeClient()
+                self.client = nextClient
+                var models = try await nextClient.connect { [weak self] models in await self?.update(models, serial: serial) }
+                if let initialModel, !initialModel.isEmpty {
+                    models = try await nextClient.selectModel(initialModel)
+                }
+                if let initialEffort, !initialEffort.isEmpty {
+                    _ = try await nextClient.selectEffort(initialEffort)
+                }
+                guard serial == generation else { return }
+                self.models = models
+                let prompt = preparePrompt(userText)
+                guard prompt.utf8.count <= ACPClient.maxPromptBytes else {
+                    phase = .ready
+                    error = ACPError.promptTooLarge.localizedDescription
+                    rescheduleIdleTimer()
+                    return
+                }
+                phase = .replying
+                lastReply = nil
+                startReply(userText: userText, prompt: prompt, client: nextClient, serial: serial)
+            } catch {
                 await failed(error, serial: serial)
             }
+        }
+    }
+
+    /// Reconnects with fresh launch capabilities (for example after toggling tools) while keeping
+    /// the visible transcript and draft intact.
+    public func reconnectKeepingTranscript() {
+        cancelIdleTimer()
+        replyTask?.cancel()
+        replyTask = nil
+        flushTask?.cancel()
+        flushTask = nil
+        pendingChunks.removeAll(keepingCapacity: false)
+        pendingReplyID = nil
+        let previous = client
+        client = nil
+        models = nil
+        activeTool = nil
+        error = nil
+        pendingToolApproval = nil
+        disconnectedForInactivity = false
+        generation += 1
+        let serial = generation
+        phase = .connecting
+        Task {
+            await previous?.close()
+            guard generation == serial else { return }
+            phase = .disconnected
+            connect()
         }
     }
 
@@ -229,8 +388,11 @@ import SwiftUI
         let old = client
         client = nil
         models = nil
+        efforts = nil
         phase = .disconnected
         disconnectedForInactivity = false
+        declinedToolsInSession = false
+        pendingToolApproval = nil
         error = nil
         draft = ""
         messages.removeAll()
@@ -261,6 +423,7 @@ import SwiftUI
         let idleClient = client
         client = nil
         models = nil
+        efforts = nil
         phase = .disconnected
         activeTool = nil
         disconnectedForInactivity = true
@@ -274,6 +437,10 @@ import SwiftUI
 
     private func update(_ models: ACPModels?, serial: Int) {
         if serial == generation { self.models = models }
+    }
+
+    private func updateEfforts(_ efforts: ACPModels?, serial: Int) {
+        if serial == generation { self.efforts = efforts }
     }
 
     private func append(_ chunk: String, to id: UUID, serial: Int) {
@@ -314,6 +481,7 @@ import SwiftUI
         let failedClient = client
         client = nil
         models = nil
+        efforts = nil
         phase = .disconnected
         disconnectedForInactivity = false
         activeTool = nil
@@ -382,6 +550,8 @@ public struct AgentChatView: View {
     @Bindable private var session: AgentChatSession
     @FocusState private var composerFocused: Bool
     @State private var copiedMessageID: UUID?
+    @State private var hoveredMessageID: UUID?
+    @State private var autoScrollPinned = true
     @State private var agentStatuses: [ACPAgentStatus] = []
     @State private var installingAdapterForID: String?
     @State private var adapterInstallError: String?
@@ -511,6 +681,10 @@ public struct AgentChatView: View {
                 adapterInstallBanner(preset)
                     .padding(.horizontal, 16)
                     .padding(.bottom, 10)
+            } else if let pending = session.pendingToolApproval {
+                toolApprovalBanner(pending)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
             } else if let message = activeError {
                 recoveryBanner(message)
                     .padding(.horizontal, 16)
@@ -612,7 +786,7 @@ public struct AgentChatView: View {
 
     private var transcript: some View {
         ScrollViewReader { reader in
-            ScrollView {
+            let scroll = ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
                     ForEach(session.messages) { message in
                         if message.isUser {
@@ -628,8 +802,27 @@ public struct AgentChatView: View {
                 .padding(.bottom, 12)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
+            .onChange(of: session.messages.count) { oldCount, newCount in
+                if newCount > oldCount {
+                    autoScrollPinned = true
+                    reader.scrollTo("chat-end", anchor: .bottom)
+                }
+            }
             .onChange(of: session.messages.last?.text) { _, _ in
-                reader.scrollTo("chat-end", anchor: .bottom)
+                if autoScrollPinned {
+                    reader.scrollTo("chat-end", anchor: .bottom)
+                }
+            }
+
+            if #available(macOS 15.0, *) {
+                scroll.onScrollGeometryChange(for: Bool.self) { geo in
+                    let distanceFromBottom = geo.contentSize.height - (geo.contentOffset.y + geo.visibleRect.height)
+                    return distanceFromBottom <= 48
+                } action: { _, nearBottom in
+                    autoScrollPinned = nearBottom
+                }
+            } else {
+                scroll
             }
         }
     }
@@ -667,9 +860,15 @@ public struct AgentChatView: View {
 
                 if copiedMessageID == message.id {
                     copiedPill
+                } else if hoveredMessageID == message.id {
+                    hoverCopyButton(message)
                 }
             }
             Spacer(minLength: 36)
+        }
+        .onHover { hovering in
+            if hovering { hoveredMessageID = message.id }
+            else if hoveredMessageID == message.id { hoveredMessageID = nil }
         }
     }
 
@@ -701,16 +900,38 @@ public struct AgentChatView: View {
                 .padding(.top, 2)
             } else if copiedMessageID == message.id {
                 copiedPill
+            } else if hoveredMessageID == message.id, !message.text.isEmpty {
+                hoverCopyButton(message)
             }
         }
         .padding(.leading, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+        .onHover { hovering in
+            if hovering { hoveredMessageID = message.id }
+            else if hoveredMessageID == message.id { hoveredMessageID = nil }
+        }
         .onTapGesture(count: 2) { copyRawMarkdown(message) }
         .contextMenu {
             Button("Copy Markdown") { copyRawMarkdown(message) }
         }
         .help("Double-click to copy raw Markdown")
+    }
+
+    private func hoverCopyButton(_ message: AgentChatSession.Message) -> some View {
+        Button { copyRawMarkdown(message) } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 9.5))
+                Text("Copy Markdown")
+                    .font(.system(size: 10.5, weight: .medium))
+            }
+            .foregroundStyle(colors.muted)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(colors.elevated, in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     private var copiedPill: some View {
@@ -801,6 +1022,62 @@ public struct AgentChatView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .strokeBorder((adapterInstallError == nil ? colors.accent : colors.danger).opacity(0.32), lineWidth: 1)
+        }
+    }
+
+    private func toolApprovalBanner(_ pending: AgentChatSession.PendingToolApproval) -> some View {
+        let heading: String = if let name = pending.toolName, !name.isEmpty {
+            "\(activeAgentName) wants to use “\(name)”"
+        } else {
+            "\(activeAgentName) wants to use a tool"
+        }
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "wrench.and.screwdriver.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(colors.accent)
+                    .padding(.top, 1)
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(heading)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(colors.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Tools are off by default in Chat mode. Allow built-in tools (such as web search) to run inside the sandbox?")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(colors.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 4)
+            }
+
+            HStack(spacing: 8) {
+                Button("Allow Always") {
+                    session.resolveToolApproval(.allowAlways)
+                }
+                .buttonStyle(QuietButtonStyle(palette: colors.palette, prominent: true, height: 24))
+
+                Button("This Session") {
+                    session.resolveToolApproval(.allowForSession)
+                }
+                .buttonStyle(QuietButtonStyle(palette: colors.palette, height: 24))
+
+                Button("Don't Allow") {
+                    session.resolveToolApproval(.deny)
+                }
+                .buttonStyle(QuietButtonStyle(palette: colors.palette, height: 24))
+
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(colors.accent.opacity(colors.isDark ? 0.14 : 0.08),
+                    in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(colors.accent.opacity(0.32), lineWidth: 1)
         }
     }
 
@@ -936,6 +1213,19 @@ public struct AgentChatView: View {
                         }
                     }
                 }
+                if isConnected, let efforts = session.efforts, !efforts.choices.isEmpty {
+                    Section("Effort") {
+                        ForEach(efforts.choices) { choice in
+                            Button { session.selectEffort(choice.id) } label: {
+                                if choice.id == efforts.current {
+                                    Label(choice.name, systemImage: "checkmark")
+                                } else {
+                                    Text(choice.name)
+                                }
+                            }
+                        }
+                    }
+                }
                 if isConnected {
                     Divider()
                     Button("Disconnect", role: .destructive) { session.disconnect() }
@@ -1003,6 +1293,7 @@ public struct AgentChatView: View {
         if selectedAgentMissingAdapter != nil {
             return adapterInstallError == nil ? colors.accent : colors.danger
         }
+        if session.pendingToolApproval != nil { return colors.accent }
         if activeError != nil { return colors.danger }
         switch session.phase {
         case .disconnected: return colors.muted.opacity(0.6)
@@ -1017,13 +1308,22 @@ public struct AgentChatView: View {
         return models.current.isEmpty ? nil : models.current
     }
 
+    private var currentEffortName: String? {
+        guard let efforts = session.efforts else { return nil }
+        if let found = efforts.choices.first(where: { $0.id == efforts.current }) { return found.name }
+        return efforts.current.isEmpty ? nil : efforts.current
+    }
+
     private var pillSubtitle: String? {
         switch session.phase {
         case .disconnected: return session.disconnectedForInactivity ? "Idle" : nil
         case .connecting: return "Connecting…"
         case .switching: return "Switching…"
         case .ready, .replying, .stopping:
-            if let name = currentModelName { return name }
+            if let name = currentModelName {
+                if let effort = currentEffortName { return "\(name) · \(effort)" }
+                return name
+            }
             return session.needsModelCatalog ? "No model" : "CLI default"
         }
     }

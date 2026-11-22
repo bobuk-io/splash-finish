@@ -135,4 +135,94 @@ import Testing
         #expect(chat.phase == .ready)
         await chat.shutdown()
     }
+
+    @Test func toolApprovalPromptRetriesOnAllowAndStopsAskingOnDeny() async throws {
+        let dir = try TemporaryDirectory(prefix: "acp-tool-prompt")
+        defer { dir.remove() }
+        let agent = #"""
+            while IFS= read -r line; do
+                case "$line" in
+                    *initialize*)
+                        printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+                        ;;
+                    *session*new*)
+                        printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"demo","configOptions":[]}}'
+                        ;;
+                    *session*prompt*)
+                        printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"demo","update":{"sessionUpdate":"tool_call","title":"web_search","status":"in_progress"}}}'
+                        printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"demo","update":{"sessionUpdate":"tool_call_update","status":"completed"}}}'
+                        printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"demo","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Search answer"}}}}'
+                        printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
+                        ;;
+                esac
+            done
+            """#
+
+        var allowTools = false
+        var choices: [AgentChatSession.ToolAccessChoice] = []
+        let chat = AgentChatSession(
+            makeClient: {
+                ACPClient(
+                    launch: .init(
+                        executable: URL(fileURLWithPath: "/bin/bash"),
+                        arguments: ["-c", agent],
+                        directory: dir.url,
+                        environment: ["PATH": "/usr/bin:/bin"],
+                        clientName: "test",
+                        isolation: .unrestricted,
+                        access: allowTools ? .tools(autoApproveTools: true) : .textOnly
+                    ),
+                    requestTimeout: .seconds(2)
+                )
+            },
+            onToolAccessChoice: { choice in
+                choices.append(choice)
+                if choice == .allowForSession || choice == .allowAlways {
+                    allowTools = true
+                }
+            }
+        )
+
+        chat.connect()
+        for _ in 0..<200 where chat.phase == .connecting { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(chat.phase == .ready)
+
+        chat.draft = "Latest Swift release?"
+        chat.send()
+        for _ in 0..<200 where chat.phase == .replying { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(chat.pendingToolApproval == .init(toolName: "web_search", promptText: "Latest Swift release?"))
+        #expect(chat.error == nil)
+        #expect(chat.messages.count == 1)
+
+        // Approving for this session reconnects with tools enabled and retries without duplicating the user turn.
+        chat.resolveToolApproval(.allowForSession)
+        for _ in 0..<200 where chat.phase != .ready { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(choices == [.allowForSession])
+        #expect(chat.pendingToolApproval == nil)
+        #expect(chat.lastReply == "Search answer")
+        #expect(chat.messages.count == 2)
+        #expect(chat.messages[0].isUser)
+        #expect(chat.messages[1].text == "Search answer")
+
+        // Reset and verify Deny: reconnects in text-only mode and does not prompt a second time in the same session.
+        allowTools = false
+        chat.disconnect()
+        chat.connect()
+        for _ in 0..<200 where chat.phase == .connecting { try await Task.sleep(for: .milliseconds(10)) }
+        chat.draft = "Try search"
+        chat.send()
+        for _ in 0..<200 where chat.phase == .replying { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(chat.pendingToolApproval?.toolName == "web_search")
+        chat.resolveToolApproval(.deny)
+        for _ in 0..<200 where chat.phase == .connecting { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(chat.phase == .ready)
+        #expect(choices == [.allowForSession, .deny])
+
+        chat.draft = "Try search again"
+        chat.send()
+        for _ in 0..<200 where chat.phase == .replying { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(chat.pendingToolApproval == nil)
+        #expect(chat.error == ACPError.unexpectedTool.localizedDescription)
+        await chat.shutdown()
+    }
 }
