@@ -499,16 +499,25 @@ public struct ACPAgentPreset: Codable, Equatable, Hashable, Identifiable, Sendab
             }
         }
 
-        // mise tool installs under ~/.local/share/mise/installs/*/latest/bin.
+        // mise tool installs under ~/.local/share/mise/installs/*/{latest,<version>}/bin.
         let miseInstalls = home.appendingPathComponent(".local/share/mise/installs")
         if let tools = try? fm.contentsOfDirectory(atPath: miseInstalls.path) {
             for tool in tools.sorted() {
-                let latestBin = miseInstalls
-                    .appendingPathComponent(tool)
-                    .appendingPathComponent("latest/bin").path
+                let toolDir = miseInstalls.appendingPathComponent(tool)
+                let latestBin = toolDir.appendingPathComponent("latest/bin").path
                 var isDir: ObjCBool = false
                 if fm.fileExists(atPath: latestBin, isDirectory: &isDir), isDir.boolValue {
                     found.append(latestBin)
+                }
+                if let versions = try? fm.contentsOfDirectory(atPath: toolDir.path) {
+                    for ver in versions.sorted(by: { $0.localizedStandardCompare($1) == .orderedDescending })
+                    where ver != "latest" && !ver.hasPrefix(".") {
+                        let verBin = toolDir.appendingPathComponent(ver).appendingPathComponent("bin").path
+                        var isVerDir: ObjCBool = false
+                        if fm.fileExists(atPath: verBin, isDirectory: &isVerDir), isVerDir.boolValue {
+                            found.append(verBin)
+                        }
+                    }
                 }
             }
         }
@@ -516,17 +525,21 @@ public struct ACPAgentPreset: Codable, Equatable, Hashable, Identifiable, Sendab
         return found
     }
 
+    private static func isShimPath(_ url: URL) -> Bool {
+        let parentName = url.deletingLastPathComponent().lastPathComponent
+        let resolved = canonical(url)
+        return parentName == "shims" || multiCallShimNames.contains(resolved.lastPathComponent)
+    }
+
     private static func resolveCandidate(at path: String, files: FileManager) -> URL? {
         guard files.isExecutableFile(atPath: path) else { return nil }
         let url = URL(fileURLWithPath: path)
-        let resolved = canonical(url)
         // Keep shim paths (mise/volta/asdf) from collapsing to the shim dispatcher binary so argv[0] stays intact.
-        let parentName = url.deletingLastPathComponent().lastPathComponent
-        if parentName == "shims" || multiCallShimNames.contains(resolved.lastPathComponent) {
+        if isShimPath(url) {
             let canonicalParent = canonical(url.deletingLastPathComponent())
             return canonicalParent.appendingPathComponent(url.lastPathComponent)
         }
-        return resolved
+        return canonical(url)
     }
 
     public func resolveExecutable(
@@ -539,14 +552,19 @@ public struct ACPAgentPreset: Codable, Equatable, Hashable, Identifiable, Sendab
             return Self.resolveCandidate(at: override, files: files)
         }
         let dirs = searchDirectories(home: home, environment: environment)
+        var shimFallback: URL?
         for exe in executables {
             for dir in dirs {
-                if let resolved = Self.resolveCandidate(at: "\(dir)/\(exe)", files: files) {
+                let candidate = "\(dir)/\(exe)"
+                guard let resolved = Self.resolveCandidate(at: candidate, files: files) else { continue }
+                if Self.isShimPath(URL(fileURLWithPath: candidate)) {
+                    if shimFallback == nil { shimFallback = resolved }
+                } else {
                     return resolved
                 }
             }
         }
-        return nil
+        return shimFallback
     }
 
     /// Resolves the underlying agent CLI binary (e.g. `codex` or `claude`) when this preset uses a separate ACP adapter.

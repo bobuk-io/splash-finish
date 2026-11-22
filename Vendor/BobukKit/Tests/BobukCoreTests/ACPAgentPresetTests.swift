@@ -139,6 +139,23 @@ import Testing
         }
     }
 
+    @Test func prefersRealVersionedMiseBinaryOverShim() throws {
+        let dir = try TemporaryDirectory(prefix: "acp-mise-versioned")
+        defer { dir.remove() }
+        let home = dir.url
+        let miseBin = home.appendingPathComponent(".local/bin/mise")
+        let shim = home.appendingPathComponent(".local/share/mise/shims/codex-acp")
+        let real = home.appendingPathComponent(".local/share/mise/installs/node/26.13.0/bin/codex-acp")
+        try makeExecutable(at: miseBin)
+        try FileManager.default.createDirectory(at: shim.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: shim, withDestinationURL: miseBin)
+        try makeExecutable(at: real)
+
+        let env = ["PATH": shim.deletingLastPathComponent().path]
+        let resolved = ACPAgentPreset.codex.resolveExecutable(home: home, environment: env)
+        #expect(resolved?.path.contains("installs/node/26.13.0/bin/codex-acp") == true)
+    }
+
     @Test func overrideAndMissingErrors() throws {
         let dir = try TemporaryDirectory(prefix: "acp-presets-override")
         defer { dir.remove() }
