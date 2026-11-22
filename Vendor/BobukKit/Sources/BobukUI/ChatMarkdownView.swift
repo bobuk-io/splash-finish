@@ -133,7 +133,7 @@ enum ChatMarkdownBlock: Equatable {
     }
 }
 
-struct ChatMarkdownView: View {
+struct ChatMarkdownView: View, Equatable {
     let rawMarkdown: String
     let ink: Color
     let muted: Color
@@ -141,6 +141,15 @@ struct ChatMarkdownView: View {
     let elevated: Color
     let line: Color
     @State private var copiedCodeIndex: Int?
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.rawMarkdown == rhs.rawMarkdown
+            && lhs.ink == rhs.ink
+            && lhs.muted == rhs.muted
+            && lhs.accent == rhs.accent
+            && lhs.elevated == rhs.elevated
+            && lhs.line == rhs.line
+    }
 
     private var blocks: [ChatMarkdownBlock] {
         ChatMarkdownBlock.parse(rawMarkdown)

@@ -30,6 +30,9 @@ import SwiftUI
     private var client: ACPClient?
     @ObservationIgnored private var replyTask: Task<Void, Never>?
     @ObservationIgnored private var idleTask: Task<Void, Never>?
+    @ObservationIgnored private var flushTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingChunks = ""
+    @ObservationIgnored private var pendingReplyID: UUID?
     private var generation = 0
     private let makeClient: () throws -> ACPClient
     private let preparePrompt: (String) -> String
@@ -152,6 +155,7 @@ import SwiftUI
                     await self?.append(chunk, to: replyID, serial: serial)
                 })
                 guard serial == generation else { return }
+                flushChunks(serial: serial)
                 activeTool = nil
                 let reply = messages.last?.text ?? ""
                 if phase != .stopping {
@@ -167,12 +171,14 @@ import SwiftUI
                 rescheduleIdleTimer()
             } catch is CancellationError {
                 guard serial == generation else { return }
+                flushChunks(serial: serial)
                 activeTool = nil
                 discardEmptyReply()
                 phase = .ready
                 rescheduleIdleTimer()
             } catch {
                 if serial == generation {
+                    flushChunks(serial: serial)
                     activeTool = nil
                     discardEmptyReply()
                 }
@@ -216,6 +222,10 @@ import SwiftUI
         cancelIdleTimer()
         replyTask?.cancel()
         replyTask = nil
+        flushTask?.cancel()
+        flushTask = nil
+        pendingChunks.removeAll(keepingCapacity: false)
+        pendingReplyID = nil
         let old = client
         client = nil
         models = nil
@@ -268,7 +278,30 @@ import SwiftUI
 
     private func append(_ chunk: String, to id: UUID, serial: Int) {
         guard serial == generation, phase == .replying, messages.last?.id == id else { return }
-        messages[messages.count - 1].text += chunk
+        pendingChunks += chunk
+        pendingReplyID = id
+        guard flushTask == nil else { return }
+        flushTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(33))
+            self?.flushChunks(serial: serial)
+        }
+    }
+
+    private func flushChunks(serial: Int) {
+        flushTask?.cancel()
+        flushTask = nil
+        guard serial == generation, !pendingChunks.isEmpty else {
+            pendingChunks.removeAll(keepingCapacity: true)
+            pendingReplyID = nil
+            return
+        }
+        let delta = pendingChunks
+        let id = pendingReplyID
+        pendingChunks.removeAll(keepingCapacity: true)
+        pendingReplyID = nil
+        if messages.last?.id == id {
+            messages[messages.count - 1].text += delta
+        }
     }
 
     private func discardEmptyReply() {
@@ -419,7 +452,7 @@ public struct AgentChatView: View {
     private var activeError: String? { session.error ?? (session.phase == .ready ? session.modelProblem : nil) }
 
     private var resolvedAgentStatuses: [ACPAgentStatus] {
-        agentStatuses.isEmpty && !agents.isEmpty ? ACPAgentPreset.detectAll(in: agents) : agentStatuses
+        agentStatuses
     }
 
     private var selectedAgentMissingAdapter: ACPAgentPreset? {
@@ -432,7 +465,13 @@ public struct AgentChatView: View {
 
     private func refreshAgentStatuses() {
         guard !agents.isEmpty else { return }
-        agentStatuses = ACPAgentPreset.detectAll(in: agents)
+        let presets = agents
+        Task {
+            let detected = await Task.detached(priority: .utility) {
+                ACPAgentPreset.detectAll(in: presets)
+            }.value
+            agentStatuses = detected
+        }
     }
 
     private func installAdapter(for preset: ACPAgentPreset) {
@@ -574,7 +613,7 @@ public struct AgentChatView: View {
     private var transcript: some View {
         ScrollViewReader { reader in
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                LazyVStack(alignment: .leading, spacing: 18) {
                     ForEach(session.messages) { message in
                         if message.isUser {
                             userTurn(message)
@@ -649,16 +688,16 @@ public struct AgentChatView: View {
                     elevated: colors.elevated,
                     line: colors.line
                 )
+                .equatable()
             }
 
             if streaming {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(colors.accent)
-                        .frame(width: 6, height: 6)
-                    MonoLabel(streamingStatus)
-                        .foregroundStyle(colors.muted)
-                }
+                StreamingStatusView(
+                    text: streamingStatus,
+                    accent: colors.accent,
+                    ink: colors.ink,
+                    muted: colors.muted
+                )
                 .padding(.top, 2)
             } else if copiedMessageID == message.id {
                 copiedPill
@@ -1073,6 +1112,70 @@ public struct AgentChatView: View {
             .keyboardShortcut(.return, modifiers: .command)
             .disabled(!session.canSend)
             .accessibilityLabel("Send message")
+        }
+    }
+}
+
+/// Subtle shimmer sweep across the streaming status label with a gently pulsing accent dot.
+private struct StreamingStatusView: View {
+    let text: String
+    let accent: Color
+    let ink: Color
+    let muted: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private static let cycleSeconds: TimeInterval = 1.7
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { context in
+            let raw = reduceMotion ? 0.5 : context.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: Self.cycleSeconds) / Self.cycleSeconds
+            let cycle = raw < 0 ? raw + 1 : raw
+            let sweep = -0.35 + cycle * 1.70
+            let pulse = 0.5 - 0.5 * cos(cycle * 2.0 * .pi)
+
+            HStack(spacing: 6) {
+                ZStack {
+                    if !reduceMotion {
+                        Circle()
+                            .fill(accent.opacity(0.32 * (1.0 - cycle)))
+                            .frame(width: 6, height: 6)
+                            .scaleEffect(1.0 + cycle * 1.35)
+                    }
+                    Circle()
+                        .fill(accent.opacity(reduceMotion ? 1.0 : 0.55 + 0.45 * pulse))
+                        .frame(width: 6, height: 6)
+                }
+                .frame(width: 10, height: 10)
+                .accessibilityHidden(true)
+
+                MonoLabel(text)
+                    .foregroundStyle(muted.opacity(0.75))
+                    .overlay {
+                        if !reduceMotion {
+                            GeometryReader { proxy in
+                                let width = max(proxy.size.width, 1)
+                                let band = max(width * 0.36, 44)
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: .clear, location: 0.0),
+                                        .init(color: accent.opacity(0.75), location: 0.35),
+                                        .init(color: ink, location: 0.5),
+                                        .init(color: accent.opacity(0.75), location: 0.65),
+                                        .init(color: .clear, location: 1.0),
+                                    ],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                                .frame(width: band, height: proxy.size.height)
+                                .offset(x: sweep * width - band * 0.5)
+                            }
+                            .clipped()
+                            .mask(MonoLabel(text))
+                            .allowsHitTesting(false)
+                        }
+                    }
+            }
         }
     }
 }

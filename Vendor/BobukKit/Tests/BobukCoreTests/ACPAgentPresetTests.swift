@@ -204,6 +204,7 @@ import Testing
             [[ "$(cat "$2")" == "project" ]] || exit 13
             printf ok > "$3/out.txt" || exit 14
             printf ok > "$4/state.txt" || exit 15
+            /usr/bin/python3 -c 'import os, pty; m, s = pty.openpty(); os.close(m); os.close(s)' || exit 16
             """#, "fixture", secretFile.path, projectFile.path, openedFolder.path, state.path]
         worker.environment = ["HOME": home.path, "PATH": "/usr/bin:/bin"]
         worker.currentDirectoryURL = openedFolder

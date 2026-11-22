@@ -945,8 +945,16 @@ public struct ACPAgentPreset: Codable, Equatable, Hashable, Identifiable, Sendab
             writableSubpaths.append(contentsOf: allowedWorkspaceRoots.map(\.path))
         }
 
-        let allowWrite = (writableSubpaths.map { "(subpath \(Self.quoted($0)))" }
-            + ["(literal \"/dev/null\")", "(literal \"/dev/tty\")"]).joined(separator: " ")
+        var allowWriteClauses = writableSubpaths.map { "(subpath \(Self.quoted($0)))" }
+            + ["(literal \"/dev/null\")", "(literal \"/dev/tty\")"]
+        if case .workspace = access {
+            // Allow workspace agents to allocate PTYs when running shell tools (e.g. validation CLIs).
+            allowWriteClauses.append(contentsOf: [
+                "(literal \"/dev/ptmx\")",
+                "(regex #\"^/dev/ttys[0-9]+$\")",
+            ])
+        }
+        let allowWrite = allowWriteClauses.joined(separator: " ")
 
         return """
         (version 1)
