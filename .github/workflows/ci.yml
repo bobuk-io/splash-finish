@@ -13,6 +13,12 @@ jobs:
     runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
+      - name: Select Xcode 26 (Swift 6.2+)
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -n 1)
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+          swift --version
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -24,14 +30,19 @@ jobs:
         run: node Tests/pi-extension.test.mjs
       - name: Rich pi question lifecycle
         run: node Tests/pi-questions.test.mjs
+      - name: OMP extension lifecycle
+        run: node Tests/omp-extension.test.mjs
+      - name: Verify vendored BobukKit
+        run: bash Vendor/BobukKit/Scripts/check-vendor.sh
       - name: Build universal app
         run: SIGNING_MODE=adhoc ARCHES='arm64 x86_64' Scripts/package_app.sh release
       - name: Verify app, architectures and embedded version
         run: |
           codesign --verify --deep --strict 'build/Splash Finish.app'
           lipo 'build/Splash Finish.app/Contents/MacOS/SplashFinish' -verify_arch arm64 x86_64
-          cmp build/Icon.icns 'build/Splash Finish.app/Contents/Resources/Icon.icns'
+          cmp .build/Icon.icns 'build/Splash Finish.app/Contents/Resources/Icon.icns'
           test "$(plutil -extract CFBundleIconFile raw 'build/Splash Finish.app/Contents/Info.plist')" = Icon
           source version.env
           test "$(plutil -extract CFBundleShortVersionString raw 'build/Splash Finish.app/Contents/Info.plist')" = "$MARKETING_VERSION"
           test "$(plutil -extract CFBundleVersion raw 'build/Splash Finish.app/Contents/Info.plist')" = "$BUILD_NUMBER"
+          python3 Tests/test_packaged_resources.py 'build/Splash Finish.app'
