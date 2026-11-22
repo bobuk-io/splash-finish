@@ -20,7 +20,7 @@ import Testing
 
     @Test func everyBuiltinPresetIsUniqueValidAndHighContrast() {
         #expect(ThemePreset.all.first == .amber)
-        #expect(ThemePreset.all.count >= 18)
+        #expect(ThemePreset.all.count == 18)
 
         let ids = ThemePreset.all.map(\.id)
         #expect(Set(ids).count == ids.count)
@@ -30,21 +30,30 @@ import Testing
             for isDark in [false, true] {
                 let colors = preset.colors(dark: isDark)
                 #expect(colors.isValid, "\(preset.id) dark=\(isDark)")
+                // Every curated preset supplies its full authentic palette.
+                for role in ThemeColorRole.allCases {
+                    #expect(colors.hex(for: role) != nil, "\(preset.id) dark=\(isDark) missing \(role)")
+                }
                 let tokens = ThemeTokens(colors: colors)
                 #expect(tokens.isDark == isDark, "\(preset.id) dark=\(isDark)")
                 #expect(!tokens.lowAccentContrast, "\(preset.id) dark=\(isDark) accent contrast \(tokens.panel.contrast(with: tokens.accent))")
-                #expect(tokens.panel.contrast(with: tokens.ink) >= 7.0, "\(preset.id) dark=\(isDark) ink contrast")
-                #expect(tokens.panel.contrast(with: tokens.muted) >= 4.5, "\(preset.id) dark=\(isDark) muted contrast")
-                #expect(tokens.panel.contrast(with: tokens.success) >= 4.5, "\(preset.id) dark=\(isDark) success contrast")
-                #expect(tokens.panel.contrast(with: tokens.danger) >= 4.5, "\(preset.id) dark=\(isDark) danger contrast")
-                #expect(tokens.accent.contrast(with: tokens.keyInk) >= 3.0, "\(preset.id) dark=\(isDark) keyInk contrast")
+                #expect(!tokens.lowInkContrast, "\(preset.id) dark=\(isDark) ink contrast \(tokens.panel.contrast(with: tokens.ink))")
+                #expect(tokens.panel.contrast(with: tokens.ink) >= 7.0, "\(preset.id) dark=\(isDark) ink contrast \(tokens.panel.contrast(with: tokens.ink))")
+                #expect(tokens.panel.contrast(with: tokens.muted) >= 4.5, "\(preset.id) dark=\(isDark) muted contrast \(tokens.panel.contrast(with: tokens.muted))")
+                #expect(tokens.panel.contrast(with: tokens.link) >= 3.5, "\(preset.id) dark=\(isDark) link contrast \(tokens.panel.contrast(with: tokens.link))")
+                #expect(tokens.panel.contrast(with: tokens.success) >= 4.5, "\(preset.id) dark=\(isDark) success contrast \(tokens.panel.contrast(with: tokens.success))")
+                #expect(tokens.panel.contrast(with: tokens.danger) >= 4.5, "\(preset.id) dark=\(isDark) danger contrast \(tokens.panel.contrast(with: tokens.danger))")
+                #expect(tokens.accent.contrast(with: tokens.keyInk) >= 3.0, "\(preset.id) dark=\(isDark) keyInk contrast \(tokens.accent.contrast(with: tokens.keyInk))")
+                #expect(tokens.selection != tokens.panel, "\(preset.id) dark=\(isDark) selection distinct")
+                #expect(tokens.elevated != tokens.panel, "\(preset.id) dark=\(isDark) surface distinct")
             }
         }
     }
 
-    @Test func tokensDetectLowAccentContrastAndTintMode() {
-        let low = ThemeTokens(panel: RGB(hex: 0x222A2E), accent: RGB(hex: 0x2B3338))
+    @Test func tokensDetectLowContrastAndSupportAutoFallback() {
+        let low = ThemeTokens(panel: RGB(hex: 0x222A2E), accent: RGB(hex: 0x2B3338), ink: RGB(hex: 0x333C40))
         #expect(low.lowAccentContrast)
+        #expect(low.lowInkContrast)
         #expect(low.isDark)
         #expect(!low.isTinted)
 
@@ -56,30 +65,42 @@ import Testing
                 > tinted.panel.contrast(with: tinted.border(increasedContrast: false)))
     }
 
-    @Test func paletteConfigPersistsSafelyAndHandlesCustomEdits() throws {
-        var config = ThemePaletteConfig(preset: ThemePreset.named("nord")!)
-        #expect(config.light.preset == "nord")
-        #expect(config.dark.preset == "nord")
+    @Test func paletteConfigPersistsAllRolesAndRemainsBackwardCompatible() throws {
+        var config = ThemePaletteConfig(preset: ThemePreset.named("kanagawa")!)
+        #expect(config.dark.ink == "#dcd7ba")
+        #expect(config.dark.link == "#7fb4ca")
 
-        config.setAccent("#ff5500", dark: true)
+        // Editing a single role marks that side as custom without losing other roles.
+        config.set("#ff5500", for: .link, dark: true)
         #expect(config.dark.preset == ThemeColors.customPresetID)
-        #expect(config.dark.accent == "#ff5500")
-        #expect(config.light.preset == "nord")
+        #expect(config.dark.link == "#ff5500")
+        #expect(config.dark.ink == "#dcd7ba")
+        #expect(config.light.preset == "kanagawa")
 
-        config.setPanel("#101018", dark: true)
-        #expect(config.dark.panel == "#101018")
+        // Resetting an optional role to nil falls back to auto derivation.
+        config.set(nil, for: .link, dark: true)
+        #expect(config.dark.link == nil)
+        #expect(config.tokens(dark: true).link == config.tokens(dark: true).accent)
+
         // Invalid hex is ignored.
-        config.setPanel("not-a-color", dark: true)
-        #expect(config.dark.panel == "#101018")
+        config.set("not-a-color", for: .surface, dark: true)
+        #expect(config.dark.surface == "#2a2a37")
 
         let data = try JSONEncoder().encode(config)
         let decoded = try JSONDecoder().decode(ThemePaletteConfig.self, from: data)
         #expect(decoded == config)
 
+        // Legacy 2-color JSON (without ink/surface/muted/etc.) decodes cleanly and derives all tokens.
+        let legacy = Data(##"{"light":{"preset":"custom","panel":"#f7f8f5","accent":"#885500"},"dark":{"preset":"nord","panel":"#2e3440","accent":"#88c0d0"}}"##.utf8)
+        let fromLegacy = try JSONDecoder().decode(ThemePaletteConfig.self, from: legacy)
+        #expect(fromLegacy.dark.panel == "#2e3440")
+        #expect(fromLegacy.dark.ink == nil)
+        #expect(fromLegacy.tokens(dark: true).ink == ThemeTokens.lightInk)
+
         // Corrupt colors fall back to Amber without throwing.
-        let corrupt = Data(##"{"light":{"preset":"bad","panel":"nope","accent":"#123"},"dark":{"preset":"nord","panel":"#2e3440","accent":"#88c0d0"}}"##.utf8)
+        let corrupt = Data(##"{"light":{"preset":"bad","panel":"nope","accent":"#123"},"dark":{"preset":"nord","panel":"#2e3440","accent":"#88c0d0","ink":"bad"}}"##.utf8)
         let recovered = try JSONDecoder().decode(ThemePaletteConfig.self, from: corrupt)
         #expect(recovered.light == ThemePreset.amber.colors(dark: false))
-        #expect(recovered.dark.panel == "#2e3440")
+        #expect(recovered.dark == ThemePreset.amber.colors(dark: true))
     }
 }

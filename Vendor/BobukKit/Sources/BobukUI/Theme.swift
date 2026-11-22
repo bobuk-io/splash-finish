@@ -29,9 +29,11 @@ public extension ThemeTokens {
     var lineNSColor: NSColor { NSColor(line) }
     var strokeNSColor: NSColor { NSColor(stroke) }
     var elevatedNSColor: NSColor { NSColor(elevated) }
+    var selectionNSColor: NSColor { NSColor(selection) }
     var hoverNSColor: NSColor { NSColor(hover) }
     var fieldNSColor: NSColor { NSColor(field) }
     var keyInkNSColor: NSColor { NSColor(keyInk) }
+    var linkNSColor: NSColor { NSColor(link) }
     var successNSColor: NSColor { NSColor(success) }
     var successSurfaceNSColor: NSColor { NSColor(successSurface) }
     var accentSurfaceNSColor: NSColor { NSColor(accentSurface) }
@@ -44,9 +46,11 @@ public extension ThemeTokens {
     var lineColor: Color { Color(line) }
     var strokeColor: Color { Color(stroke) }
     var elevatedColor: Color { Color(elevated) }
+    var selectionColor: Color { Color(selection) }
     var hoverColor: Color { Color(hover) }
     var fieldColor: Color { Color(field) }
     var keyInkColor: Color { Color(keyInk) }
+    var linkColor: Color { Color(link) }
     var successColor: Color { Color(success) }
     var successSurfaceColor: Color { Color(successSurface) }
     var accentSurfaceColor: Color { Color(accentSurface) }
@@ -64,12 +68,14 @@ public extension ThemeTokens {
             secondary: mutedNSColor,
             accent: accentNSColor,
             border: NSColor(border(increasedContrast: increasedContrast)),
-            badgeInk: keyInkNSColor
+            badgeInk: keyInkNSColor,
+            selection: selectionNSColor,
+            link: linkNSColor
         )
     }
 
     func chromeStyle(separator: NSColor? = nil,
-                     destructiveHover: NSColor? = ChromeStyle.defaultDestructive,
+                     destructiveHover: NSColor? = nil,
                      appearance: NSAppearance? = nil) -> ChromeStyle {
         ChromeStyle(
             panel: panelNSColor,
@@ -77,7 +83,7 @@ public extension ThemeTokens {
             muted: mutedNSColor,
             accent: accentNSColor,
             separator: separator ?? strokeNSColor,
-            destructiveHover: isTinted ? nil : destructiveHover,
+            destructiveHover: isTinted ? nil : (destructiveHover ?? dangerNSColor),
             appearance: appearance ?? chromeAppearance
         )
     }
@@ -201,18 +207,21 @@ public extension ThemeTokens {
         applyPreset(preset)
     }
 
+    /// Sets a custom color for any role on one appearance side; passing `nil` resets an optional role to Auto.
+    public func setColor(_ rgb: RGB?, for role: ThemeColorRole, dark isDark: Bool) {
+        var next = palette
+        next.set(rgb?.hex, for: role, dark: isDark)
+        palette = next
+    }
+
     /// Sets a custom panel color for one appearance side.
     public func setPanel(_ rgb: RGB, dark isDark: Bool) {
-        var next = palette
-        next.setPanel(rgb.hex, dark: isDark)
-        palette = next
+        setColor(rgb, for: .panel, dark: isDark)
     }
 
     /// Sets a custom accent color for one appearance side.
     public func setAccent(_ rgb: RGB, dark isDark: Bool) {
-        var next = palette
-        next.setAccent(rgb.hex, dark: isDark)
-        palette = next
+        setColor(rgb, for: .accent, dark: isDark)
     }
 
     /// Resets both light and dark palettes to `defaultPreset`.

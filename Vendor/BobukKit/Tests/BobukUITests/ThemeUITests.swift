@@ -102,4 +102,58 @@ import Testing
         #expect(host.frame.width == 440)
         #expect(host.frame.height == 340)
     }
+
+    @Test func themeStoreSetsExtendedColorRolesAndAutoResets() {
+        let (defaults, suite) = IsolatedDefaults.make()
+        defer { IsolatedDefaults.remove(suite) }
+        let keys = ThemeStore.StorageKeys(appearance: "appTheme", palette: "appThemePalette")
+
+        let store = ThemeStore(defaults: defaults, keys: keys, defaultAppearance: .dark,
+                               defaultPreset: .amber, appliesToApplication: false)
+        store.setColor(RGB(hex: 0xDDEEFF), for: .ink, dark: true)
+        store.setColor(RGB(hex: 0x33AAFF), for: .link, dark: true)
+        store.setColor(RGB(hex: 0x223344), for: .selection, dark: true)
+        store.setColor(RGB(hex: 0xFF4466), for: .danger, dark: true)
+
+        #expect(store.colors.preset == ThemeColors.customPresetID)
+        #expect(store.tokens.ink == RGB(hex: 0xDDEEFF))
+        #expect(store.tokens.link == RGB(hex: 0x33AAFF))
+        #expect(store.tokens.selection == RGB(hex: 0x223344))
+        #expect(store.tokens.danger == RGB(hex: 0xFF4466))
+        #expect(store.pickerPalette.selection.rgb == RGB(hex: 0x223344))
+        #expect(store.pickerPalette.link.rgb == RGB(hex: 0x33AAFF))
+        #expect(store.chromeStyle.destructiveHover?.rgb == RGB(hex: 0xFF4466))
+
+        let reloaded = ThemeStore(defaults: defaults, keys: keys, defaultAppearance: .dark,
+                                  defaultPreset: .amber, appliesToApplication: false)
+        #expect(reloaded.colors.link == "#33aaff")
+        #expect(reloaded.colors.selection == "#223344")
+        #expect(reloaded.tokens.danger == RGB(hex: 0xFF4466))
+
+        // Resetting a role to nil clears the override and falls back to the auto-derived color.
+        reloaded.setColor(nil, for: .link, dark: true)
+        #expect(reloaded.colors.link == nil)
+        #expect(reloaded.tokens.link == reloaded.tokens.accent)
+    }
+
+    @Test func themeSettingsFormRowsHostsCleanly() {
+        _ = NSApplication.shared
+        let (defaults, suite) = IsolatedDefaults.make()
+        defer { IsolatedDefaults.remove(suite) }
+        let store = ThemeStore(defaults: defaults, defaultAppearance: .dark, appliesToApplication: false)
+        let view = Form {
+            Section("Appearance") {
+                ThemeSettingsFormRows(theme: store)
+            }
+        }
+        .formStyle(.grouped)
+        .themedSurface(store)
+        .frame(width: 480, height: 420)
+
+        let host = ChromeWindow.hosting(view)
+        host.setFrameSize(NSSize(width: 480, height: 420))
+        host.layoutSubtreeIfNeeded()
+        #expect(host.frame.width == 480)
+        #expect(host.frame.height == 420)
+    }
 }

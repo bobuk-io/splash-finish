@@ -27,7 +27,7 @@ need it, add it here, not to the app. Agents: read `AGENTS.md`.
 | Picker rows, badges, search field, shortcut hints (+ optional Settings gear), panel frame | `PickerRow`, `PickerBadge`, `PickerSearchField`, `ShortcutFooter(..., onSettings:)`, `.pickerPanel`, `PickerSurfaceView` | BobukUI |
 | Light/dark colors from hex, the shared amber palette | `NSColor.dynamic(light:dark:)`, `BobukColors`, `PickerPalette.bobukAmber` | BobukUI |
 | App-wide Light/Dark/System setting | `AppearanceChoice` (`apply()`, `stored(in:key:)`) | BobukUI |
-| Color themes: curated presets, custom panel/accent, derived WCAG tokens, live store & Settings UI | `RGB`, `ThemePreset`, `ThemeColors`, `ThemePaletteConfig`, `ThemeTokens`, `ThemeStore`, `ThemedSection`, `ThemeSettingsSection`, `ThemePreview`, `.themedSurface(_:)`, `ChromeWindow.bindTheme`, `BobukPanel.bindTheme` | BobukCore / BobukUI |
+| Color themes: 18 multi-color presets, 10 customizable color roles, WCAG contrast tokens, live store & Settings UI | `RGB`, `ThemeColorRole`, `ThemePreset`, `ThemeColors`, `ThemePaletteConfig`, `ThemeTokens`, `ThemeStore`, `ThemedSection`, `ThemeSettingsSection`, `ThemeSettingsFormRows`, `ThemeSwatchStrip`, `ThemePreview`, `.themedSurface(_:)`, `ChromeWindow.bindTheme`, `BobukPanel.bindTheme` | BobukCore / BobukUI |
 | Small bordered or accent button, mono caps label | `QuietButtonStyle(palette:prominent:)`, `MonoLabel` | BobukUI |
 | A short message near the top of the screen | `ToastController` | BobukUI |
 | Global hotkey (no Accessibility permission) | `GlobalHotkeyCenter(signature:)` | BobukSystem |

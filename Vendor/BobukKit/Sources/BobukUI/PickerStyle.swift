@@ -8,15 +8,20 @@ public struct PickerPalette {
     public var accent: NSColor
     public var border: NSColor
     public var badgeInk: NSColor
+    public var selection: NSColor
+    public var link: NSColor
 
     public init(surface: NSColor, text: NSColor, secondary: NSColor,
-                accent: NSColor, border: NSColor, badgeInk: NSColor) {
+                accent: NSColor, border: NSColor, badgeInk: NSColor,
+                selection: NSColor? = nil, link: NSColor? = nil) {
         self.surface = surface
         self.text = text
         self.secondary = secondary
         self.accent = accent
         self.border = border
         self.badgeInk = badgeInk
+        self.selection = selection ?? accent.withAlphaComponent(0.18)
+        self.link = link ?? accent
     }
 }
 

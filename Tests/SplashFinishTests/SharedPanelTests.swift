@@ -116,14 +116,20 @@ final class SharedPanelTests: XCTestCase {
 
                 // 2. Settings Window
                 let settingsWin = ChromeWindow(
-                    contentRect: NSRect(origin: .zero, size: ChromeMetrics.windowSize(forBody: NSSize(width: 460, height: 550))),
+                    contentRect: NSRect(origin: .zero, size: ChromeMetrics.windowSize(forBody: NSSize(width: 480, height: 590))),
                     theme: theme, resizable: false, showsTitle: true)
                 settingsWin.title = "Settings"
-                settingsWin.setContent(SettingsView(model: model, theme: theme, installSkills: {}, uninstallSkills: {}))
+                let settingsHost = settingsWin.setContent(SettingsView(model: model, theme: theme, installSkills: {}, uninstallSkills: {}))
                 if let content = settingsWin.contentView {
-                    content.layoutSubtreeIfNeeded()
-                    content.displayIfNeeded()
+                    for _ in 0..<4 {
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+                        content.layoutSubtreeIfNeeded()
+                        settingsHost.layoutSubtreeIfNeeded()
+                        content.displayIfNeeded()
+                    }
                     XCTAssertFalse(settingsWin.isVisible)
+                    XCTAssertEqual(settingsHost.bounds.width, 480, accuracy: 1)
+                    XCTAssertGreaterThan(settingsHost.bounds.height, 500)
                     if let previewDir {
                         let bmp = try XCTUnwrap(content.bitmapImageRepForCachingDisplay(in: content.bounds))
                         content.cacheDisplay(in: content.bounds, to: bmp)

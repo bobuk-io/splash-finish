@@ -106,7 +106,7 @@ import BobukUpdates
     let suite = UserDefaults(suiteName: "bobukkit-gallery-\(UUID().uuidString)")!
     let store = ThemeStore(defaults: suite, defaultAppearance: dark ? .dark : .light,
                            defaultPreset: preset, appliesToApplication: false)
-    let window = ChromeWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 340), theme: store,
+    let window = ChromeWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 420), theme: store,
                               resizable: false, showsTitle: true)
     window.title = "Settings — \(preset.title)"
     window.setContent(

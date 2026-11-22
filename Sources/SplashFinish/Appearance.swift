@@ -44,6 +44,7 @@ extension ChromeStyle {
     var theme: ThemeStore = .splash
     let installSkills: () -> Void
     let uninstallSkills: () -> Void
+    var onBodyHeight: ((CGFloat) -> Void)? = nil
     @State private var startsAtLogin = LoginItem.isEnabled
 
     private func toggleRow(_ title: String, isOn: Binding<Bool>) -> some View {
@@ -93,11 +94,17 @@ extension ChromeStyle {
                     Spacer(minLength: 0)
                 }
             }
-
-            Spacer(minLength: 0)
         }
         .padding(18)
-        .frame(width: 460, height: 550, alignment: .topLeading)
+        .frame(width: 480, alignment: .topLeading)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { onBodyHeight?(proxy.size.height) }
+                    .onChange(of: proxy.size.height) { _, height in onBodyHeight?(height) }
+            }
+        )
         .themedSurface(theme)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             startsAtLogin = LoginItem.isEnabled

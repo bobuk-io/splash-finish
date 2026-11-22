@@ -298,9 +298,18 @@ import SplashFinishCore
     private func windowRect(forBody size: NSSize) -> NSRect {
         NSRect(origin: .zero, size: ChromeMetrics.windowSize(forBody: size))
     }
+    private func resizeSettings(bodyHeight: CGFloat) {
+        guard bodyHeight > 100, let window = settingsWindow?.window as? ChromeWindow else { return }
+        let target = window.contentSize(forBody: NSSize(width: 480, height: ceil(bodyHeight)))
+        let current = window.frame
+        let delta = target.height - window.contentRect(forFrameRect: current).height
+        guard abs(delta) > 1 else { return }
+        let next = NSRect(x: current.origin.x, y: current.origin.y - delta, width: current.width, height: current.height + delta)
+        window.setFrame(next, display: true, animate: window.isVisible)
+    }
     private func makeWindows() {
         settingsWindow = HostedWindowController(window: { [unowned self] in
-            let window = ChromeWindow(contentRect: windowRect(forBody: NSSize(width: 460, height: 550)), theme: .splash,
+            let window = ChromeWindow(contentRect: windowRect(forBody: NSSize(width: 480, height: 590)), theme: .splash,
                                       resizable: false, showsTitle: true)
             window.title = "Settings"
             return window
@@ -308,7 +317,8 @@ import SplashFinishCore
             SettingsView(model: model,
                          theme: .splash,
                          installSkills: { [weak self] in self?.changeSkills(install: true) },
-                         uninstallSkills: { [weak self] in self?.changeSkills(install: false) })
+                         uninstallSkills: { [weak self] in self?.changeSkills(install: false) },
+                         onBodyHeight: { [weak self] height in self?.resizeSettings(bodyHeight: height) })
         })
         integrationsWindow = HostedWindowController(frameName: "Integrations", window: { [unowned self] in
             let window = ChromeWindow(contentRect: windowRect(forBody: NSSize(width: 560, height: 500)), theme: .splash,

@@ -69,13 +69,13 @@ private struct NotificationRow: View {
                         }
                     }.allowsHitTesting(false)
                     MessagePreview(text: event.title, size: 16,
-                        color: tokens.inkNSColor, linkColor: tokens.accentNSColor,
+                        color: tokens.inkNSColor, linkColor: tokens.linkNSColor,
                         lines: 2, characterLimit: 160, onOpenSource: onOpen)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     HStack(spacing: 5) {
                         if !event.detail.isEmpty {
                             MessagePreview(text: event.detail, size: 11,
-                                color: tokens.mutedNSColor, linkColor: tokens.accentNSColor,
+                                color: tokens.mutedNSColor, linkColor: tokens.linkNSColor,
                                 lines: 1, characterLimit: 400, onOpenSource: onOpen)
                             Text("·").allowsHitTesting(false)
                         }
@@ -99,8 +99,8 @@ private struct NotificationRow: View {
                         help: "Dismiss notification", palette: palette, size: 24, action: onDismiss)
                 .padding(.top, 22)
         }.padding(.horizontal, 4)
-            .background(ink.opacity(selected ? 0.09 : hovered ? 0.035 : 0), in: .rect(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(ink.opacity(selected ? 0.17 : 0)))
+            .background(selected ? tokens.selectionColor : (hovered ? ink.opacity(0.035) : .clear), in: .rect(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(selected ? tokens.lineColor.opacity(0.6) : .clear))
             .accessibilityAddTraits(selected ? .isSelected : [])
             .contextMenu {
                 Button("Open Source", action: onOpen)

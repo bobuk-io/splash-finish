@@ -18,7 +18,7 @@ public struct PickerRow<Content: View>: View {
             .padding(.horizontal, PickerMetrics.rowInset)
             .frame(maxWidth: .infinity, minHeight: PickerMetrics.rowHeight, alignment: .center)
             .background(RoundedRectangle(cornerRadius: PickerMetrics.rowRadius)
-                .fill(Color(nsColor: selected ? palette.accent.withAlphaComponent(0.18)
+                .fill(Color(nsColor: selected ? palette.selection
                              : palette.text.withAlphaComponent(hovering ? 0.06 : 0))))
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
