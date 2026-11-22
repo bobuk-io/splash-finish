@@ -394,17 +394,47 @@ if let dir = ProcessInfo.processInfo.environment["BOBUKKIT_PREVIEW_DIR"] {
 
 ---
 
-## 9. Text-only ACP Chat (`ACPClient` + `AgentChatSession` + `AgentChatView`)
+## 9. Text-only ACP Chat (`ACPAgentPreset` + `ACPClient` + `AgentChatView`)
 
 BobukKit provides a reusable text-only chat over **ACP v1** (JSON-RPC 2.0 over stdio):
-- `BobukCore`: `ACPProcessIsolation`, `ACPLaunchConfiguration`, `ACPClient`, `ACPModels`, `ACPError`.
-- `BobukUI`: `AgentChatSession` (`@MainActor @Observable`) and `AgentChatView` (minimalist editorial thread, centered empty state with clickable `starters`, unified floating composer with `Agent · Model` menu, optional sandbox pill, `⌘↩` send, `esc` stop, and inline error/recovery banner).
+- `BobukCore`: `ACPAgentPreset` (built-in presets for **Antigravity**, **Codex**, **Claude**, **Pi**, **Kimi**, **Gemini**, **OpenCode**), `ACPProcessIsolation`, `ACPLaunchConfiguration`, `ACPClient`, `ACPModels`, `ACPError`.
+- `BobukUI`: `AgentChatSession` (`@MainActor @Observable`) and `AgentChatView` (minimalist editorial thread, centered empty state with clickable `starters`, unified floating composer with `Agent · Model` switcher menu, optional sandbox pill, `⌘↩` send, `esc` stop, and inline error/recovery banner).
 
-### Step 1: Build `ACPLaunchConfiguration` with explicit process isolation
+### Built-in ACP agent presets (`ACPAgentPreset.all`)
 
-Always specify `ACPProcessIsolation` explicitly:
-- `.sandboxed(launcher:arguments:)` — launches a trusted sandbox wrapper (e.g. `/usr/bin/sandbox-exec` with `-p <profile>`) and appends `executable.path` + `arguments`. A sandbox launch failure **never** falls back to direct launch.
-- `.unrestricted` — launches `executable` directly with the app's OS privileges. Use only after informed user opt-in.
+| Preset | Executable(s) | Arguments | Notes |
+| --- | --- | --- | --- |
+| `.antigravity` | `agy` | `acp --disable-telemetry --include-default-customizations=false` (`+--sandbox`) | Built-in ACP; requires model catalog |
+| `.codex` | `codex-acp` | *(none)* | `npm i -g @agentclientprotocol/codex-acp` |
+| `.claude` | `claude-agent-acp`, `claude-code-acp` | *(none)* | `npm i -g @agentclientprotocol/claude-agent-acp` |
+| `.pi` | `pi-acp` | *(none)* | `npm i -g pi-acp` |
+| `.kimi` | `kimi` | `acp` | Built-in ACP (`kimi acp --login`) |
+| `.gemini` | `gemini` | `--acp` | Built-in ACP (`@google/gemini-cli`) |
+| `.opencode` | `opencode` | `acp` | Built-in ACP (`brew install opencode`) |
+
+### Step 1: Auto-detect available agents & launch in a working folder
+
+Use `ACPAgentPreset.detectInstalled()` / `ACPAgentPreset.preferredAvailable()` to discover which CLI agents are installed on the user's Mac (`~/.local/bin`, `/opt/homebrew/bin`, `mise`, `volta`, `PATH`, or `BOBUK_ACP_<ID>_PATH`).
+
+`ACPAgentPreset.launch(in:sandboxed:access:clientName:)` opens the agent in `directory` (`cwd`) with network access enabled:
+- `access: .workspace(allowWrite: true, autoApproveTools: true)` (default) advertises ACP `fs/read_text_file` & `fs/write_text_file` scoped to `directory` (+ `additionalRoots`), allows tool calls, and streams active tool status to `session.activeTool`.
+- `access: .textOnly` disables all ACP file/tool capabilities and disconnects on unexpected tool execution.
+- `sandboxed: true` (default) wraps the process in `/usr/bin/sandbox-exec`, allowing reads/writes in `directory` and the agent's own state dir while blocking unrelated user folders (`~/Downloads`, `~/Desktop`, `~/Documents`, `/Volumes`, `/Network`). Never falls back to direct launch.
+- `sandboxed: false` launches `.unrestricted` with the user's OS privileges.
+
+```swift
+let available = ACPAgentPreset.detectInstalled()
+let agent = ACPAgentPreset.preferredAvailable()
+let launch = try agent.launch(
+    in: projectFolderURL,
+    sandboxed: options.sandboxed,
+    access: .workspace(allowWrite: true, autoApproveTools: true),
+    clientName: "myapp"
+)
+let client = ACPClient(launch: launch)
+```
+
+For a custom agent or custom sandbox policy, construct `ACPLaunchConfiguration` directly:
 
 ```swift
 import BobukCore
@@ -449,6 +479,7 @@ import BobukUI
 import SwiftUI
 
 @MainActor @Observable final class ChatOptions {
+    var agent: ACPAgentPreset = .antigravity
     var sandboxed = true
 }
 
@@ -462,7 +493,7 @@ struct AssistantView: View {
         VStack(spacing: 0) {
             AgentChatView(
                 session: chat,
-                agent: "Local agent",
+                agent: options.agent.name,
                 intro: "Text-only session without file access.",
                 emptyTitle: "How can I help?",
                 placeholder: "Message…",
@@ -470,8 +501,11 @@ struct AssistantView: View {
                     "Draft a rule for PDF invoices",
                     "Suggest an initial folder structure",
                 ],
-                sandboxed: $options.sandboxed, // omit to hide the sandbox toggle
-                tokens: theme.tokens           // or pass `palette: theme.pickerPalette`
+                sandboxed: $options.sandboxed,      // omit to hide the sandbox toggle
+                agents: ACPAgentPreset.all,         // auto-detects Available vs Not Installed
+                selectedAgent: $options.agent,
+                workingDirectory: projectFolderURL, // shows active folder badge in composer
+                tokens: theme.tokens                // or pass `palette: theme.pickerPalette`
             )
 
             // React to a complete, validated reply without mutating anything automatically:
@@ -558,8 +592,42 @@ Create the session lazily, disconnect when the window closes (releasing the chil
 }
 ```
 
+### Headless one-shot call (no UI required, explicit `model` & `effort`)
+
+Works in pure `*Core` targets, background workers, or CLI tools — no AppKit/SwiftUI needed. `model` matches exact ID, display name, or case-insensitive substring; `effort` maps to the agent's ACP `thought_level` / `reasoning_effort` option (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`):
+
+```swift
+import BobukCore
+
+let reply = try await ACPAgentPreset.antigravity.ask(
+    "Classify fiber_2026-03.pdf into one folder.",
+    in: archiveFolderURL,
+    options: ACPPromptOptions(
+        model: "gemini-3.8-flash",
+        effort: "low",
+        sandboxed: true,
+        access: .textOnly // or .workspace(allowWrite: false) to let the agent inspect files
+    ),
+    clientName: "myapp"
+) { chunk in
+    // Optional streaming callback
+}
+print(reply.text, reply.model ?? "", reply.effort ?? "")
+
+// Or auto-pick the first installed agent on the user's Mac:
+let quick = try await ACPAgentPreset.ask(
+    "Summarize README.md",
+    in: projectFolderURL,
+    options: ACPPromptOptions(effort: "medium", access: .workspace(allowWrite: false)),
+    clientName: "myapp"
+)
+```
+
+For UI sessions (`AgentChatSession`), pass `initialModel:` and `initialEffort:` to pre-select them automatically on connect.
+
 ### Rules & security boundary
 
+- **Markdown & raw copy:** `AgentChatView` renders Markdown (headings, lists, blockquotes, inline styles, and fenced code blocks with a per-block Copy button). Every message supports text selection, right-click **Copy Markdown**, and **double-click** to copy the exact raw Markdown as plain text (`NSPasteboard.PasteboardType.string`, never RTF).
 - **No credentials in BobukKit:** the local CLI must already be authenticated in Terminal; `ACPClient` maps `-32000` auth errors to `ACPError.authenticationRequired`.
 - **Complete replies only:** `chat.lastReply` is populated only after `stopReason == "end_turn"` with non-empty text, never on cancelled or truncated turns. Always validate it before deriving app actions, and never execute it as code.
 - **Process boundary vs. ACP callbacks:** `ACPClient` advertises empty `clientCapabilities`, attaches no MCP servers, rejects `session/request_permission` and unknown server methods, and disconnects on unexpected `tool_call` execution (`ACPError.unexpectedTool`). That does **not** restrict the agent's own built-in tools — the caller owns process confinement, working directory, and environment. Keep ACP policy and process isolation separate.

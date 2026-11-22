@@ -14,6 +14,7 @@ import SwiftUI
     public private(set) var models: ACPModels?
     public private(set) var messages: [Message] = []
     public private(set) var lastReply: String?
+    public private(set) var activeTool: String?
     public private(set) var error: String?
     public var draft = ""
 
@@ -24,25 +25,38 @@ import SwiftUI
     private let preparePrompt: (String) -> String
     private let displayReply: (String) -> String
     private let missingModelsMessage: String?
+    private let requiresModelCatalog: () -> Bool
+    private let initialModel: String?
+    private let initialEffort: String?
 
     /// Supply `missingModelsMessage` for agents that cannot answer without a model catalog.
+    /// Pass `requiresModelCatalog` when switching between agents with different catalog behavior.
+    /// Pass `initialModel` / `initialEffort` to pre-select a model and reasoning effort on connect.
     public init(makeClient: @escaping () throws -> ACPClient, preparePrompt: @escaping (String) -> String = { $0 },
-                displayReply: @escaping (String) -> String = { $0 }, missingModelsMessage: String? = nil) {
+                displayReply: @escaping (String) -> String = { $0 }, missingModelsMessage: String? = nil,
+                requiresModelCatalog: (() -> Bool)? = nil,
+                initialModel: String? = nil, initialEffort: String? = nil) {
         self.makeClient = makeClient
         self.preparePrompt = preparePrompt
         self.displayReply = displayReply
         self.missingModelsMessage = missingModelsMessage
+        self.requiresModelCatalog = requiresModelCatalog ?? { missingModelsMessage != nil }
+        self.initialModel = initialModel
+        self.initialEffort = initialEffort
     }
 
     public var canSend: Bool {
         phase == .ready && modelProblem == nil && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    fileprivate var needsModelCatalog: Bool { missingModelsMessage != nil && models?.choices.isEmpty != false }
+    fileprivate var needsModelCatalog: Bool {
+        missingModelsMessage != nil && requiresModelCatalog() && models?.choices.isEmpty != false
+    }
 
     fileprivate var modelProblem: String? {
         if needsModelCatalog { return missingModelsMessage }
-        return missingModelsMessage != nil && models?.current.isEmpty == true ? "Choose a model before sending." : nil
+        return missingModelsMessage != nil && requiresModelCatalog() && models?.current.isEmpty == true
+            ? "Choose a model before sending." : nil
     }
 
     public func connect() {
@@ -56,7 +70,13 @@ import SwiftUI
             self.client = client
             Task {
                 do {
-                    let models = try await client.connect { [weak self] models in await self?.update(models, serial: serial) }
+                    var models = try await client.connect { [weak self] models in await self?.update(models, serial: serial) }
+                    if let initialModel, !initialModel.isEmpty {
+                        models = try await client.selectModel(initialModel)
+                    }
+                    if let initialEffort, !initialEffort.isEmpty {
+                        _ = try await client.selectEffort(initialEffort)
+                    }
                     guard serial == generation else { return }
                     self.models = models
                     phase = .ready
@@ -101,10 +121,13 @@ import SwiftUI
         let replyID = messages[messages.count - 1].id
         replyTask = Task {
             do {
-                let reason = try await client.prompt(prompt) { [weak self] chunk in
+                let reason = try await client.prompt(prompt, onTool: { [weak self] tool in
+                    await self?.setActiveTool(tool, serial: serial)
+                }, onChunk: { [weak self] chunk in
                     await self?.append(chunk, to: replyID, serial: serial)
-                }
+                })
                 guard serial == generation else { return }
+                activeTool = nil
                 let reply = messages.last?.text ?? ""
                 if phase != .stopping {
                     if reason == "end_turn", !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -118,10 +141,14 @@ import SwiftUI
                 phase = .ready
             } catch is CancellationError {
                 guard serial == generation else { return }
+                activeTool = nil
                 discardEmptyReply()
                 phase = .ready
             } catch {
-                if serial == generation { discardEmptyReply() }
+                if serial == generation {
+                    activeTool = nil
+                    discardEmptyReply()
+                }
                 await failed(error, serial: serial)
             }
         }
@@ -169,7 +196,12 @@ import SwiftUI
         draft = ""
         messages.removeAll()
         lastReply = nil
+        activeTool = nil
         return old
+    }
+
+    private func setActiveTool(_ tool: String?, serial: Int) {
+        if serial == generation { activeTool = tool }
     }
 
     private func update(_ models: ACPModels?, serial: Int) {
@@ -191,6 +223,7 @@ import SwiftUI
         client = nil
         models = nil
         phase = .disconnected
+        activeTool = nil
         self.error = error.localizedDescription
         await failedClient?.close()
     }
@@ -250,16 +283,21 @@ private struct ChatColors {
     }
 }
 
-/// Minimalist, editorial text-only chat surface backed by `AgentChatSession`.
+/// Minimalist, editorial Markdown chat surface backed by `AgentChatSession`.
+/// Double-clicking any message copies its raw Markdown as plain text.
 public struct AgentChatView: View {
     @Bindable private var session: AgentChatSession
     @FocusState private var composerFocused: Bool
+    @State private var copiedMessageID: UUID?
     private let emptyTitle: String
     private let agent: String
     private let intro: String
     private let placeholder: String
     private let starters: [String]
     private let sandboxed: Binding<Bool>?
+    private let agents: [ACPAgentPreset]
+    private let selectedAgent: Binding<ACPAgentPreset>?
+    private let workingDirectory: URL?
     private let colors: ChatColors
 
     public init(
@@ -270,6 +308,9 @@ public struct AgentChatView: View {
         placeholder: String = "Message…",
         starters: [String] = [],
         sandboxed: Binding<Bool>? = nil,
+        agents: [ACPAgentPreset] = [],
+        selectedAgent: Binding<ACPAgentPreset>? = nil,
+        workingDirectory: URL? = nil,
         tokens: ThemeTokens
     ) {
         self.session = session
@@ -279,6 +320,9 @@ public struct AgentChatView: View {
         self.placeholder = placeholder
         self.starters = starters
         self.sandboxed = sandboxed
+        self.agents = agents
+        self.selectedAgent = selectedAgent
+        self.workingDirectory = workingDirectory
         self.colors = ChatColors(tokens: tokens)
     }
 
@@ -289,6 +333,9 @@ public struct AgentChatView: View {
         intro: String,
         starters: [String] = [],
         sandboxed: Binding<Bool>? = nil,
+        agents: [ACPAgentPreset] = [],
+        selectedAgent: Binding<ACPAgentPreset>? = nil,
+        workingDirectory: URL? = nil,
         palette: PickerPalette
     ) {
         self.session = session
@@ -298,6 +345,9 @@ public struct AgentChatView: View {
         self.placeholder = "Message…"
         self.starters = starters
         self.sandboxed = sandboxed
+        self.agents = agents
+        self.selectedAgent = selectedAgent
+        self.workingDirectory = workingDirectory
         self.colors = ChatColors(palette: palette)
     }
 
@@ -424,31 +474,61 @@ public struct AgentChatView: View {
         }
     }
 
+    private func copyRawMarkdown(_ message: AgentChatSession.Message) {
+        guard !message.text.isEmpty else { return }
+        PlainPasteboard.copy(message.text)
+        copiedMessageID = message.id
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.3))
+            if copiedMessageID == message.id { copiedMessageID = nil }
+        }
+    }
+
     private func userTurn(_ message: AgentChatSession.Message) -> some View {
         HStack(spacing: 0) {
-            Text(message.text)
-                .font(.system(size: 13.5))
-                .lineSpacing(3.5)
-                .foregroundStyle(colors.ink)
-                .textSelection(.enabled)
-                .padding(.horizontal, 13)
-                .padding(.vertical, 9)
-                .background(colors.elevated, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(colors.line, lineWidth: 1)
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(message.text)
+                    .font(.system(size: 13.5))
+                    .lineSpacing(3.5)
+                    .foregroundStyle(colors.ink)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 9)
+                    .background(colors.elevated, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(colors.line, lineWidth: 1)
+                    }
+                    .onTapGesture(count: 2) { copyRawMarkdown(message) }
+                    .contextMenu {
+                        Button("Copy Markdown") { copyRawMarkdown(message) }
+                    }
+                    .help("Double-click to copy raw Markdown")
+
+                if copiedMessageID == message.id {
+                    copiedPill
                 }
+            }
             Spacer(minLength: 36)
         }
     }
 
     private func assistantTurn(_ message: AgentChatSession.Message, streaming: Bool) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(message.text.isEmpty ? "…" : message.text)
-                .font(.system(size: 13.5))
-                .lineSpacing(4.5)
-                .foregroundStyle(colors.ink)
-                .textSelection(.enabled)
+            if message.text.isEmpty {
+                Text("…")
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(colors.muted)
+            } else {
+                ChatMarkdownView(
+                    rawMarkdown: message.text,
+                    ink: colors.ink,
+                    muted: colors.muted,
+                    accent: colors.accent,
+                    elevated: colors.elevated,
+                    line: colors.line
+                )
+            }
 
             if streaming {
                 HStack(spacing: 6) {
@@ -459,14 +539,36 @@ public struct AgentChatView: View {
                         .foregroundStyle(colors.muted)
                 }
                 .padding(.top, 2)
+            } else if copiedMessageID == message.id {
+                copiedPill
             }
         }
         .padding(.leading, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) { copyRawMarkdown(message) }
+        .contextMenu {
+            Button("Copy Markdown") { copyRawMarkdown(message) }
+        }
+        .help("Double-click to copy raw Markdown")
+    }
+
+    private var copiedPill: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 9.5, weight: .semibold))
+            Text("Copied Markdown")
+                .font(.system(size: 10.5, weight: .medium))
+        }
+        .foregroundStyle(colors.accent)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(colors.accentSurface, in: Capsule())
     }
 
     private var streamingStatus: String {
         if session.phase == .stopping { return "STOPPING" }
+        if let tool = session.activeTool, !tool.isEmpty { return tool.uppercased() }
         if let name = currentModelName { return "GENERATING · \(name.uppercased())" }
         return "GENERATING"
     }
@@ -516,6 +618,21 @@ public struct AgentChatView: View {
             HStack(spacing: 8) {
                 agentModelControl
 
+                if let workingDirectory {
+                    HStack(spacing: 4) {
+                        Image(systemName: "folder")
+                            .font(.system(size: 10.5))
+                        Text(workingDirectory.lastPathComponent)
+                            .font(.system(size: 11))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .foregroundStyle(colors.muted)
+                    .padding(.horizontal, 6)
+                    .frame(height: 24)
+                    .help(workingDirectory.path)
+                }
+
                 if let sandboxed {
                     sandboxControl(sandboxed)
                 }
@@ -535,12 +652,40 @@ public struct AgentChatView: View {
         }
     }
 
+    private var activeAgentName: String {
+        selectedAgent?.wrappedValue.name ?? agent
+    }
+
+    private var canSwitchAgent: Bool {
+        selectedAgent != nil && !agents.isEmpty && (session.phase == .disconnected || session.phase == .ready)
+    }
+
     @ViewBuilder private var agentModelControl: some View {
-        if session.phase == .disconnected || session.phase == .connecting {
+        let isConnected = session.phase != .disconnected && session.phase != .connecting
+        if !isConnected && !canSwitchAgent {
             agentPillLabel(showChevron: false)
         } else {
             Menu {
-                if let models = session.models, !models.choices.isEmpty {
+                if let selectedAgent, !agents.isEmpty {
+                    let installed = ACPAgentPreset.detectInstalled(in: agents).map(\.preset)
+                    let installedIDs = Set(installed.map(\.id))
+                    let unavailable = agents.filter { !installedIDs.contains($0.id) }
+                    if !installed.isEmpty {
+                        Section("Available Agents") {
+                            ForEach(installed) { preset in
+                                agentMenuItem(preset, selectedAgent: selectedAgent, installed: true)
+                            }
+                        }
+                    }
+                    if !unavailable.isEmpty {
+                        Section("Not Installed") {
+                            ForEach(unavailable) { preset in
+                                agentMenuItem(preset, selectedAgent: selectedAgent, installed: false)
+                            }
+                        }
+                    }
+                }
+                if isConnected, let models = session.models, !models.choices.isEmpty {
                     Section("Model") {
                         ForEach(models.choices) { choice in
                             Button { session.selectModel(choice.id) } label: {
@@ -552,16 +697,33 @@ public struct AgentChatView: View {
                             }
                         }
                     }
-                    Divider()
                 }
-                Button("Disconnect", role: .destructive) { session.disconnect() }
+                if isConnected {
+                    Divider()
+                    Button("Disconnect", role: .destructive) { session.disconnect() }
+                }
             } label: {
                 agentPillLabel(showChevron: true)
             }
             .menuStyle(.borderlessButton)
             .layoutPriority(0)
-            .disabled(session.phase != .ready)
-            .accessibilityLabel(currentModelName.map { "\(agent), model \($0)" } ?? agent)
+            .disabled(session.phase != .ready && session.phase != .disconnected)
+            .accessibilityLabel(currentModelName.map { "\(activeAgentName), model \($0)" } ?? activeAgentName)
+        }
+    }
+
+    private func agentMenuItem(_ preset: ACPAgentPreset, selectedAgent: Binding<ACPAgentPreset>, installed: Bool) -> some View {
+        Button {
+            guard preset != selectedAgent.wrappedValue else { return }
+            if session.phase != .disconnected { session.disconnect() }
+            selectedAgent.wrappedValue = preset
+        } label: {
+            let label = installed ? preset.name : "\(preset.name) (not installed)"
+            if preset == selectedAgent.wrappedValue {
+                Label(label, systemImage: "checkmark")
+            } else {
+                Text(label)
+            }
         }
     }
 
@@ -570,7 +732,7 @@ public struct AgentChatView: View {
             Circle()
                 .fill(statusDotColor)
                 .frame(width: 6, height: 6)
-            Text(agent)
+            Text(activeAgentName)
                 .font(.system(size: 11.5, weight: .medium))
                 .foregroundStyle(colors.ink)
                 .lineLimit(1)

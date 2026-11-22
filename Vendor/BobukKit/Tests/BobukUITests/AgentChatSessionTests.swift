@@ -1,10 +1,38 @@
 import BobukCore
 import BobukTestSupport
-import BobukUI
+@testable import BobukUI
 import Foundation
 import Testing
 
 @MainActor struct AgentChatSessionTests {
+    @Test func markdownParserSeparatesBlocksWhilePreservingCode() {
+        let raw = """
+        # Title
+
+        Hello **world**.
+
+        - First item
+        - Second item
+
+        1. Step one
+
+        > Quoted note
+
+        ```swift
+        let x = 1
+        ```
+        """
+        let blocks = ChatMarkdownBlock.parse(raw)
+        #expect(blocks == [
+            .heading(level: 1, text: "Title"),
+            .paragraph("Hello **world**."),
+            .bullet("First item"),
+            .bullet("Second item"),
+            .ordered(number: "1", text: "Step one"),
+            .quote("Quoted note"),
+            .code(language: "swift", code: "let x = 1"),
+        ])
+    }
     @Test(arguments: [true, false]) func modelCatalogRequirement(_ required: Bool) async throws {
         let dir = try TemporaryDirectory(prefix: "acp-no-models")
         defer { dir.remove() }
