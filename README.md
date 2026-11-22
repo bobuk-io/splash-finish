@@ -1,6 +1,6 @@
 # Splash Finish
 
-A little landing strip for AI agents. **Splash Finish** is a native macOS menu bar app that collects finished work and requests for attention from Claude Code, Codex, GitHub Copilot CLI, Antigravity (`agy`), and pi in one quiet window. Because one agent interrupting you is a notification; five agents doing it is a committee.
+A little landing strip for AI agents. **Splash Finish** is a native macOS menu bar app that collects finished work and requests for attention from Claude Code, Codex, GitHub Copilot CLI, Antigravity (`agy`), pi, and Oh My Pi (OMP) in one quiet window. Because one agent interrupting you is a notification; six agents doing it is a committee.
 
 ![Splash Finish inbox](screenshots/splash-finish.png)
 
@@ -43,6 +43,7 @@ splash-finish install-skills
 - **GitHub Copilot CLI:** restart existing sessions to load the skill and hooks. This integration is for the local CLI, not GitHub's cloud coding agent.
 - **Antigravity (`agy`):** start a new session to load the plugin installed under `~/.gemini/config/plugins/splash-finish`. Works with Antigravity CLI (`agy`), Antigravity 2.0, and Antigravity IDE.
 - **pi:** use `/reload` in running sessions, or start a new one. Requires pi **1.5.0+** for the `agent_settled` and `ui_prompt_start` events.
+- **Oh My Pi (OMP):** start a new session or restart and resume the current one to load the skill and extension.
 
 Installation of integrations is explicit. The app will not edit agent settings just because you opened it.
 
@@ -133,7 +134,7 @@ Deep links are not authenticated: any local app can send them. They display boun
 
 ```sh
 splash-finish install-skills                 # all agents
-splash-finish install-skills --agent pi      # claude | codex | copilot | agy | pi
+splash-finish install-skills --agent omp     # claude | codex | copilot | agy | pi | omp
 splash-finish uninstall-skills               # remove all Splash Finish integrations
 splash-finish uninstall-skills --agent codex
 ```
@@ -145,12 +146,15 @@ splash-finish uninstall-skills --agent codex
 | GitHub Copilot CLI | user skill and `~/.copilot/hooks/splash-finish.json` | turn end, new prompt, session end, and supported permission/input notifications |
 | Antigravity (`agy`) | native plugin at `~/.gemini/config/plugins/splash-finish` (`plugin.json`, `hooks.json`, and skill) | `Stop` (with final reply preview, errors, and cancellation), `ask_question` prompts, and new-turn clearing via `PreInvocation` |
 | pi | user skill and `~/.pi/agent/extensions/splash-finish.ts` | settled, extension UI prompts, common question tools, errors and interruption |
+| Oh My Pi (OMP) | user skill and `~/.omp/agent/extensions/splash-finish.ts` | settled turns, `ask`, tool approval and plan review requests |
 
 Pi notifications are fire-and-forget and never delay the agent. User-opened menus while Pi is idle (such as `/jewter`) do not trigger attention notifications or clear completed items; blocking dialogs during an active agent run still report requests for input. Subagent sessions (pi-subagents background children and in-process `run-N` sessions) are filtered: only requests for input are forwarded, so a fan-out of workers does not flood the inbox.
 
 Antigravity installs as a self-contained plugin (`~/.gemini/config/plugins/splash-finish`, honoring `ANTIGRAVITY_CONFIG_DIR`) without editing your own `~/.gemini/config/hooks.json`. You can also toggle it with `agy plugin disable splash-finish` / `agy plugin enable splash-finish`. `PreToolUse` and `PostToolUse` are matched strictly to `ask_question` (never gating other tools), and `Stop` reads only the tail of the current-user-owned local `transcriptPath` to show the latest reply preview without storing transcripts. User cancellations (`USER_CANCELED`) clear the card without raising an error; subagent non-attention events are ignored.
 
 Copilot reports “Agent turn ended” without reading the answer or transcript. A turn can end while background work is still running; a later turn produces another notification. Only `permission_prompt` and `elicitation_dialog` notifications request attention; background notifications and subagent events are ignored. Tool completions cannot identify which question was resolved, so attention remains until a new prompt, turn end, or session end.
+
+OMP sends notifications only for the main interactive terminal session. It waits for background work and queued messages before reporting completion. Prompts, answers and transcripts stay in OMP; use OMP itself to respond to questions, approve tools or review plans. The installer honors `PI_CONFIG_DIR` and the default profile's `PI_CODING_AGENT_DIR` override, or the named profile selected by `OMP_PROFILE` (legacy `PI_PROFILE`). Do not point pi and OMP at the same agent directory. If you already installed Splash Finish for OMP by hand, move the old skill and extension out of OMP's discovery paths before installing the managed copies, so notifications aren't sent twice.
 
 Set `SPLASH_FINISH_DISABLED=1` in managed worker processes (for example pi-selecta workers) to suppress their lifecycle hooks, rich questions and explicit `notify` calls. Leave it unset in the coordinator so only the coordinator asks the human and reports completion. Available in 0.3.8 and later. Pi integrations, installed hook shell guards, and the CLI honor this opt-out. After updating, reinstall integrations with `splash-finish install-skills` and run `/reload` in existing Pi sessions.
 

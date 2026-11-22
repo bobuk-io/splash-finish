@@ -499,7 +499,10 @@ final class FilesAndInstallerTests: XCTestCase {
         resources = project.appendingPathComponent("Sources/SplashFinish/Resources/Integrations")
     }
     override func tearDownWithError() throws { try FileManager.default.removeItem(at: home) }
-    var installer: IntegrationInstaller { IntegrationInstaller(home: home, environment: [:], executable: "/Applications/Splash Finish.app/Contents/MacOS/SplashFinish", resources: resources) }
+    var installer: IntegrationInstaller { makeInstaller(environment: [:]) }
+    private func makeInstaller(environment: [String: String]) -> IntegrationInstaller {
+        IntegrationInstaller(home: home, environment: environment, executable: "/Applications/Splash Finish.app/Contents/MacOS/SplashFinish", resources: resources)
+    }
     func testStatePersistenceAndPermissions() throws {
         var inbox = Inbox(); try inbox.receive(AgentEvent(task: "one", agent: "pi", status: .done, title: "Done")); inbox.snooze()
         let file = StateFile(url: home.appendingPathComponent("state.json"))
@@ -516,6 +519,8 @@ final class FilesAndInstallerTests: XCTestCase {
         _ = try installer.run(install: true, agents: AgentKind.allCases)
         XCTAssertEqual(first, try Data(contentsOf: url))
         let extensionURL = home.appendingPathComponent(".pi/agent/extensions/splash-finish.ts")
+        let ompExtension = home.appendingPathComponent(".omp/agent/extensions/splash-finish.ts")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: ompExtension.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: extensionURL.path))
         XCTAssertFalse(try String(contentsOf: extensionURL).contains("__EXECUTABLE_JSON__"))
         let current = try JSONSerialization.jsonObject(with: first) as! [String: Any]
@@ -524,6 +529,7 @@ final class FilesAndInstallerTests: XCTestCase {
         let restored = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! NSDictionary
         XCTAssertTrue(restored.isEqual(to: original))
         XCTAssertFalse(FileManager.default.fileExists(atPath: extensionURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ompExtension.path))
         _ = try installer.run(install: false, agents: AgentKind.allCases)
     }
     func testInstalledHooksHonorWorkerOptOut() throws {
@@ -561,9 +567,9 @@ final class FilesAndInstallerTests: XCTestCase {
         XCTAssertFalse(installer.piAgentAskDetected(), "A configured but missing package is not installed")
         try SafeFile.write(Data("{\"name\":\"pi-agent-ask\",\"version\":\"2.0.2\"}".utf8), to: package)
         XCTAssertTrue(installer.piAgentAskDetected())
-        XCTAssertTrue(installer.inspect(inbox: Inbox()).last!.piAskDetected)
+        XCTAssertEqual(installer.inspect(inbox: Inbox()).first { $0.agent == .pi }?.piAskDetected, true)
         XCTAssertTrue(try installer.run(install: true, agents: [.pi]).joined().contains("rich questions enabled"))
-        XCTAssertTrue(installer.inspect(inbox: Inbox()).last!.richQuestionsEnabled)
+        XCTAssertEqual(installer.inspect(inbox: Inbox()).first { $0.agent == .pi }?.richQuestionsEnabled, true)
         try SafeFile.write(Data("{\"packages\":[{\"source\":\"npm:pi-agent-ask\",\"extensions\":[]}]}".utf8), to: settings)
         XCTAssertFalse(installer.piAgentAskDetected(), "A disabled extension must not be offered as available")
         XCTAssertTrue(try installer.run(install: true, agents: [.pi]).joined().contains("pi install npm:pi-agent-ask"))
@@ -575,12 +581,12 @@ final class FilesAndInstallerTests: XCTestCase {
         _ = try installer.run(install: true, agents: [.pi], richQuestions: true)
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
         XCTAssertFalse(try String(contentsOf: file, encoding: .utf8).contains("__EXECUTABLE_JSON__"))
-        XCTAssertEqual(installer.inspect(inbox: Inbox()).last?.richQuestionsEnabled, true)
+        XCTAssertEqual(installer.inspect(inbox: Inbox()).first { $0.agent == .pi }?.richQuestionsEnabled, true)
         _ = try installer.run(install: true, agents: [.pi])
         XCTAssertTrue(FileManager.default.fileExists(atPath: file.path), "CLI reinstall preserves a project-local opt-in")
         _ = try installer.run(install: true, agents: [.pi], richQuestions: false)
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
-        XCTAssertEqual(installer.inspect(inbox: Inbox()).last?.richQuestionsEnabled, false)
+        XCTAssertEqual(installer.inspect(inbox: Inbox()).first { $0.agent == .pi }?.richQuestionsEnabled, false)
         _ = try installer.run(install: true, agents: [.pi], richQuestions: true)
         _ = try installer.run(install: false, agents: [.pi])
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
@@ -594,17 +600,192 @@ final class FilesAndInstallerTests: XCTestCase {
     }
     func testDoctorDetectsInstallOutdatedAndLastEvent() throws {
         var inbox = Inbox()
-        XCTAssertEqual(installer.inspect(inbox: inbox).map(\.state), [.notInstalled, .notInstalled, .notInstalled, .notInstalled, .notInstalled])
+        let initial = installer.inspect(inbox: inbox)
+        XCTAssertEqual(initial.map(\.agent), AgentKind.allCases)
+        XCTAssertTrue(initial.allSatisfy { $0.state == .notInstalled })
         _ = try installer.run(install: true, agents: [.pi])
         try inbox.receive(AgentEvent(task: "s", agent: "pi", status: .done, title: "done"))
-        let installed = installer.inspect(inbox: inbox).last!
+        let installed = try XCTUnwrap(installer.inspect(inbox: inbox).first { $0.agent == .pi })
         XCTAssertEqual(installed.state, .installed); XCTAssertNotNil(installed.lastEvent)
         // Display-name variants of an agent map to the same last-event record.
         try inbox.receive(AgentEvent(task: "c", agent: "Claude Code", status: .done, title: "done"))
         XCTAssertNotNil(installer.inspect(inbox: inbox).first { $0.agent == .claude }?.lastEvent)
         let skill = home.appendingPathComponent(".pi/agent/skills/splash-finish/SKILL.md")
         try Data("<!-- Managed by Splash Finish --> old".utf8).write(to: skill)
-        XCTAssertEqual(installer.inspect(inbox: inbox).last?.state, .updateAvailable)
+        XCTAssertEqual(installer.inspect(inbox: inbox).first { $0.agent == .pi }?.state, .updateAvailable)
+    }
+    func testOmpLifecycleAndLastEventWithoutHooksOrRichPi() throws {
+        let root = home.appendingPathComponent(".omp/agent")
+        let adapter = root.appendingPathComponent("extensions/splash-finish.ts")
+        let skill = root.appendingPathComponent("skills/splash-finish/SKILL.md")
+        let rich = root.appendingPathComponent("extensions/splash-finish-questions.ts")
+        let unrelated = ["hooks.json", "settings.json", "config.yml", "extensions/user.ts"].map { root.appendingPathComponent($0) }
+        let userContent = Data("User configuration\n".utf8)
+        for path in unrelated { try SafeFile.write(userContent, to: path) }
+        var inbox = Inbox()
+        try inbox.receive(AgentEvent(task: "session", agent: "OMP", status: .done, title: "Done"))
+
+        XCTAssertEqual(installer.inspect(inbox: inbox).first { $0.agent == .omp }?.state, .notInstalled)
+        let messages = try installer.run(install: true, agents: [.omp], richQuestions: true)
+        XCTAssertTrue(messages.contains("Installed omp skill and extension"))
+        XCTAssertFalse(messages.joined().contains("pi-agent-ask"))
+        let initialAdapter = try String(contentsOf: adapter, encoding: .utf8)
+        let initialSkill = try String(contentsOf: skill, encoding: .utf8)
+        let marker = "// Managed by Splash Finish (OMP). Reinstall to update; uninstall-skills removes this file."
+        XCTAssertTrue(initialAdapter.hasPrefix(marker + "\n"))
+        let encodedExecutable = String(decoding: try JSONEncoder().encode(installer.executable), as: UTF8.self)
+        XCTAssertTrue(initialAdapter.contains(encodedExecutable))
+        XCTAssertFalse(initialAdapter.contains("__EXECUTABLE_JSON__"))
+        XCTAssertTrue(initialSkill.contains("'\(installer.executable)'"))
+        XCTAssertFalse(initialSkill.contains("__COMMAND__"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: rich.path))
+        let status = try XCTUnwrap(installer.inspect(inbox: inbox).first { $0.agent == .omp })
+        XCTAssertEqual(status.state, .installed)
+        XCTAssertEqual(status.lastEvent, inbox.lastEvents?["omp"])
+        XCTAssertNotNil(status.lastEvent)
+        XCTAssertFalse(status.richQuestionsEnabled)
+        XCTAssertFalse(status.piAskDetected)
+
+        try FileManager.default.removeItem(at: skill)
+        XCTAssertEqual(installer.inspect(inbox: inbox).first { $0.agent == .omp }?.state, .incomplete)
+        _ = try installer.run(install: true, agents: [.omp])
+        XCTAssertEqual(try String(contentsOf: skill, encoding: .utf8), initialSkill)
+        XCTAssertEqual(try String(contentsOf: adapter, encoding: .utf8), initialAdapter)
+        try SafeFile.write(Data((marker + "\n// Old adapter\n").utf8), to: adapter)
+        XCTAssertEqual(installer.inspect(inbox: inbox).first { $0.agent == .omp }?.state, .updateAvailable)
+        _ = try installer.run(install: true, agents: [.omp])
+        XCTAssertEqual(try String(contentsOf: adapter, encoding: .utf8), initialAdapter)
+
+        try SafeFile.write(userContent, to: rich)
+        _ = try installer.run(install: false, agents: [.omp])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: adapter.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: skill.deletingLastPathComponent().path))
+        XCTAssertEqual(installer.inspect(inbox: inbox).first { $0.agent == .omp }?.state, .notInstalled)
+        for path in unrelated + [rich] { XCTAssertEqual(try Data(contentsOf: path), userContent) }
+    }
+    func testOmpResolvesConfigRootDefaultOverrideAndNamedProfiles() throws {
+        let custom = home.appendingPathComponent(".custom-omp")
+        let override = home.appendingPathComponent("custom agent dir").path
+        let named = custom.appendingPathComponent("profiles/work.v2-3_team/agent").path
+        let legacy = home.appendingPathComponent(".omp/profiles/legacy/agent").path
+        let defaultRoot = home.appendingPathComponent(".omp/agent").path
+        let maxLength = String(repeating: "a", count: 64)
+        let scenarios: [([String: String], String)] = [
+            (["PI_CONFIG_DIR": ".custom-omp"], custom.appendingPathComponent("agent").path),
+            (["PI_CONFIG_DIR": "", "PI_CODING_AGENT_DIR": ""], defaultRoot),
+            (["PI_CODING_AGENT_DIR": override], override),
+            (["OMP_PROFILE": " \twork.v2-3_team\n", "PI_PROFILE": "..", "PI_CONFIG_DIR": ".custom-omp", "PI_CODING_AGENT_DIR": override], named),
+            (["PI_PROFILE": "legacy", "PI_CODING_AGENT_DIR": override], legacy),
+            (["OMP_PROFILE": maxLength], home.appendingPathComponent(".omp/profiles/\(maxLength)/agent").path),
+            (["OMP_PROFILE": "", "PI_PROFILE": "legacy", "PI_CODING_AGENT_DIR": override], override),
+            (["OMP_PROFILE": " default ", "PI_PROFILE": "legacy", "PI_CODING_AGENT_DIR": legacy], defaultRoot)
+        ]
+        let candidateRoots = Set(scenarios.map { $0.1 })
+        for (environment, expected) in scenarios {
+            let configured = makeInstaller(environment: environment)
+            _ = try configured.run(install: true, agents: [.omp])
+            for root in candidateRoots {
+                let extensionPath = root + "/extensions/splash-finish.ts"
+                XCTAssertEqual(FileManager.default.fileExists(atPath: extensionPath), root == expected, "\(environment)")
+            }
+            XCTAssertEqual(configured.inspect(inbox: Inbox()).first { $0.agent == .omp }?.state, .installed)
+            _ = try configured.run(install: false, agents: [.omp])
+            XCTAssertFalse(FileManager.default.fileExists(atPath: expected + "/extensions/splash-finish.ts"))
+        }
+    }
+    func testInvalidOmpProfilesRefusePreflightForAllWithoutAffectingPi() throws {
+        let claude = home.appendingPathComponent(".claude/settings.json")
+        let invalidNames = ["../outside", "/absolute", "Uppercase", "work.", "-work", "com1.txt", "work🧪", String(repeating: "a", count: 65)]
+        for name in invalidNames {
+            let configured = makeInstaller(environment: ["OMP_PROFILE": name, "PI_PROFILE": "valid"])
+            XCTAssertThrowsError(try configured.run(install: true, agents: AgentKind.allCases)) {
+                XCTAssertTrue($0.localizedDescription.contains("Invalid OMP profile"))
+            }
+            let statuses = configured.inspect(inbox: Inbox())
+            XCTAssertEqual(statuses.first { $0.agent == .omp }?.state, .error)
+            XCTAssertEqual(statuses.first { $0.agent == .pi }?.state, .notInstalled)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: claude.path))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: home.appendingPathComponent(".omp").path))
+        }
+        let legacy = makeInstaller(environment: ["PI_PROFILE": ".."])
+        XCTAssertThrowsError(try legacy.run(install: true, agents: [.omp]))
+        XCTAssertNoThrow(try legacy.run(install: true, agents: [.pi]))
+    }
+    func testSharedAgentRootRefusesAllAndProtectsEachAdaptersOwnership() throws {
+        let sharedRoot = home.appendingPathComponent("shared")
+        let adapter = sharedRoot.appendingPathComponent("extensions/splash-finish.ts")
+        let skill = sharedRoot.appendingPathComponent("skills/splash-finish/SKILL.md")
+        let claude = home.appendingPathComponent(".claude/settings.json")
+        let shared = makeInstaller(environment: ["PI_CODING_AGENT_DIR": sharedRoot.path])
+        XCTAssertThrowsError(try shared.run(install: true, agents: AgentKind.allCases)) {
+            XCTAssertTrue($0.localizedDescription.contains("share an agent directory"))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sharedRoot.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: claude.path))
+        _ = try installer.run(install: true, agents: [.claude])
+        let claudeConfig = try Data(contentsOf: claude)
+        XCTAssertThrowsError(try shared.run(install: false, agents: AgentKind.allCases))
+        XCTAssertEqual(try Data(contentsOf: claude), claudeConfig)
+
+        let ownershipPairs: [(AgentKind, AgentKind)] = [(.pi, .omp), (.omp, .pi)]
+        for (owner, other) in ownershipPairs {
+            _ = try shared.run(install: true, agents: [owner])
+            let originalAdapter = try Data(contentsOf: adapter)
+            let originalSkill = try Data(contentsOf: skill)
+            for install in [true, false] {
+                XCTAssertThrowsError(try shared.run(install: install, agents: [other])) {
+                    XCTAssertTrue($0.localizedDescription.contains("adapter managed for"))
+                }
+                XCTAssertEqual(try Data(contentsOf: adapter), originalAdapter)
+                XCTAssertEqual(try Data(contentsOf: skill), originalSkill)
+            }
+            let states = shared.inspect(inbox: Inbox())
+            XCTAssertEqual(states.first { $0.agent == owner }?.state, .installed)
+            XCTAssertEqual(states.first { $0.agent == other }?.state, .error)
+            _ = try shared.run(install: false, agents: [owner])
+            XCTAssertFalse(FileManager.default.fileExists(atPath: adapter.path))
+        }
+
+        let named = makeInstaller(environment: [
+            "OMP_PROFILE": "work",
+            "PI_CODING_AGENT_DIR": home.appendingPathComponent(".omp/profiles/work/../work/agent").path
+        ])
+        XCTAssertThrowsError(try named.run(install: true, agents: AgentKind.allCases)) {
+            XCTAssertTrue($0.localizedDescription.contains("share an agent directory"))
+        }
+        XCTAssertEqual(try Data(contentsOf: claude), claudeConfig)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: home.appendingPathComponent(".omp").path))
+    }
+    func testOmpPreflightRefusesUnmanagedAdapterAndDanglingSymlink() throws {
+        let adapter = home.appendingPathComponent(".omp/agent/extensions/splash-finish.ts")
+        let claude = home.appendingPathComponent(".claude/settings.json")
+        let userContent = Data("// User adapter\n// Managed by Splash Finish (OMP). Reinstall to update; uninstall-skills removes this file.\n".utf8)
+        try SafeFile.write(userContent, to: adapter)
+        for install in [true, false] {
+            XCTAssertThrowsError(try installer.run(install: install, agents: AgentKind.allCases))
+            XCTAssertEqual(try Data(contentsOf: adapter), userContent)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: claude.path))
+        }
+        XCTAssertEqual(installer.inspect(inbox: Inbox()).first { $0.agent == .omp }?.state, .error)
+
+        try FileManager.default.removeItem(at: adapter)
+        let missing = home.appendingPathComponent("missing.ts")
+        try FileManager.default.createSymbolicLink(at: adapter, withDestinationURL: missing)
+        for install in [true, false] {
+            XCTAssertThrowsError(try installer.run(install: install, agents: [.omp])) {
+                XCTAssertTrue($0.localizedDescription.contains("Refusing symlink"))
+            }
+        }
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: adapter.path), missing.path)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path))
+
+        try FileManager.default.removeItem(at: adapter)
+        let skill = home.appendingPathComponent(".omp/agent/skills/splash-finish/SKILL.md")
+        try SafeFile.write(Data("User skill\n".utf8), to: skill)
+        for install in [true, false] {
+            XCTAssertThrowsError(try installer.run(install: install, agents: [.omp]))
+            XCTAssertEqual(try String(contentsOf: skill, encoding: .utf8), "User skill\n")
+        }
     }
     func testBackupRotationKeepsNewestThree() throws {
         let url = home.appendingPathComponent(".codex/hooks.json")
