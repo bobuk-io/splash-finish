@@ -49,6 +49,7 @@ recipes, exact API signatures, and known macOS/Swift 6 pitfalls — also vendore
 | Atomic writes that refuse symlinks; single-instance lock | `SafeFile.write`, `FileLock` | BobukCore |
 | Most-recent-first history | `RecentList` | BobukCore |
 | Run a program with time limit, output cap and cancel | `ChildProcess.run` | BobukCore |
+| Embed a text-only ACP agent chat | `ACPClient`, `AgentChatSession`, `AgentChatView` (caller supplies an isolated subprocess and interprets replies) | BobukCore / BobukUI |
 | App ↔ command-line companion IPC | `MessagePortServer`, `MessagePortClient` (`sendTimeout`, `waitForServer(keepWaiting:)`) | BobukCore |
 | The real `.app`, version, resource bundles without `Bundle.module` (also under `swift test`) | `AppBundle` | BobukCore |
 | Logging | `BobukLog.logger("category")` | BobukCore |
