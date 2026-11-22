@@ -28,7 +28,7 @@ import SplashFinishCore
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        AppearanceChoice.saved.apply()
+        ThemeStore.splash.apply()
     }
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
@@ -37,20 +37,23 @@ import SplashFinishCore
         } catch { NSApp.terminate(nil); return }
         model = AppModel()
         panel = SplashPanel(size: panelSize)
+        panel.bindTheme(.splash)
         panel.onKeyAction = { [weak self] action in self?.handleKey(action) ?? false }
-        panel.contentView = NSHostingView(rootView: PanelView(model: model,
+        panel.contentView = NSHostingView(rootView: PanelView(model: model, theme: .splash,
             onOpen: { [weak self] event in
                 guard let self else { return }
                 self.model.openSource(event)
             }, onSize: { [weak self] size in
                 DispatchQueue.main.async { self?.resize(to: size) }
+            }, onSettings: { [weak self] in
+                self?.showSettings()
             }))
         model.onChange = { [weak self] reveal in self?.update(reveal: reveal) }
         _ = UpdateService.shared
         registerHotkey()
         makeWindows()
         makeMenu()
-        HomebrewLaunch.showResultIfRequested(app: .splashFinish, palette: .splash)
+        HomebrewLaunch.showResultIfRequested(app: .splashFinish, theme: .splash)
         update(reveal: model.revealsAtLaunch)
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.offerIntegrationUpdates() }
         let urls = pendingURLs; pendingURLs.removeAll()
@@ -297,26 +300,27 @@ import SplashFinishCore
     }
     private func makeWindows() {
         settingsWindow = HostedWindowController(window: { [unowned self] in
-            let window = ChromeWindow(contentRect: windowRect(forBody: NSSize(width: 440, height: 300)), style: .splashWindow,
+            let window = ChromeWindow(contentRect: windowRect(forBody: NSSize(width: 460, height: 550)), theme: .splash,
                                       resizable: false, showsTitle: true)
             window.title = "Settings"
             return window
         }, rootView: { [unowned self] in
             SettingsView(model: model,
+                         theme: .splash,
                          installSkills: { [weak self] in self?.changeSkills(install: true) },
                          uninstallSkills: { [weak self] in self?.changeSkills(install: false) })
         })
         integrationsWindow = HostedWindowController(frameName: "Integrations", window: { [unowned self] in
-            let window = ChromeWindow(contentRect: windowRect(forBody: NSSize(width: 560, height: 480)), style: .splashWindow,
+            let window = ChromeWindow(contentRect: windowRect(forBody: NSSize(width: 560, height: 500)), theme: .splash,
                                       showsTitle: true)
             window.title = "Splash Finish — Integrations"
             return window
-        }, rootView: { [unowned self] in IntegrationsView(model: model) })
+        }, rootView: { [unowned self] in IntegrationsView(model: model, theme: .splash) })
     }
     @objc private func showSettings() { settingsWindow.show() }
     @objc private func showIntegrations() {
         // Reopening an open window refreshes the integration states, as before.
-        (integrationsWindow.window as? ChromeWindow)?.setContent(IntegrationsView(model: model))
+        (integrationsWindow.window as? ChromeWindow)?.setContent(IntegrationsView(model: model, theme: .splash))
         integrationsWindow.show()
     }
     private func changeSkills(install: Bool) {

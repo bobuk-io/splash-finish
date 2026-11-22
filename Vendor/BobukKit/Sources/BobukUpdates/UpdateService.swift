@@ -55,10 +55,10 @@ public final class UpdateService {
 
     /// - Parameter makeSparkle: called only when Sparkle updates this copy.
     public init(app: AppUpdateIdentity, choice: UpdaterChoice, palette: PickerPalette = .system,
-                makeSparkle: () -> SparkleUpdating) {
+                theme: ThemeStore? = nil, makeSparkle: () -> SparkleUpdating) {
         self.app = app
         self.choice = choice
-        homebrewWindow = HomebrewUpdateWindowController.shared(for: app, palette: palette)
+        homebrewWindow = HomebrewUpdateWindowController.shared(for: app, palette: palette, theme: theme)
         sparkle = choice == .sparkle ? makeSparkle() : nil
         automaticallyChecks = sparkle?.automaticallyChecks ?? false
     }
@@ -66,10 +66,10 @@ public final class UpdateService {
     /// The service of the running copy: Homebrew, Sparkle or nothing, from the real app bundle
     /// behind the executable and its Info.plist.
     public static func detect(app: AppUpdateIdentity, palette: PickerPalette = .system,
-                              makeSparkle: () -> SparkleUpdating) -> UpdateService {
+                              theme: ThemeStore? = nil, makeSparkle: () -> SparkleUpdating) -> UpdateService {
         let choice = UpdaterChoice.detect(cask: app.cask, bundle: AppBundle.applicationURL, info: AppBundle.info,
                                           environment: ProcessInfo.processInfo.environment)
-        return UpdateService(app: app, choice: choice, palette: palette, makeSparkle: makeSparkle)
+        return UpdateService(app: app, choice: choice, palette: palette, theme: theme, makeSparkle: makeSparkle)
     }
 
     /// True when Sparkle updates this copy; its controls are shown then.
@@ -116,17 +116,17 @@ public enum HomebrewLaunch {
     /// Call first in `main`, before the app's own command-line handling: in the recovery viewer
     /// (`--homebrew-update-viewer <run>`) this shows only the progress window and never returns.
     public static func runViewerIfRequested(_ arguments: [String] = CommandLine.arguments, app: AppUpdateIdentity,
-                                            palette: PickerPalette = .system) {
+                                            palette: PickerPalette = .system, theme: ThemeStore? = nil) {
         guard let run = HomebrewUpdate.resultDirectory(in: arguments, base: app.runBase,
                                                        argument: HomebrewUpdate.viewerArgument) else { return }
-        HomebrewUpdateViewer.run(run, app: app, palette: palette)
+        HomebrewUpdateViewer.run(run, app: app, palette: palette, theme: theme)
     }
 
     /// Call after launch: an installed copy started with `--homebrew-update-log <run>` shows the result.
     public static func showResultIfRequested(_ arguments: [String] = CommandLine.arguments, app: AppUpdateIdentity,
-                                             palette: PickerPalette = .system) {
+                                             palette: PickerPalette = .system, theme: ThemeStore? = nil) {
         guard let run = HomebrewUpdate.resultDirectory(in: arguments, base: app.runBase) else { return }
-        HomebrewUpdateWindowController.shared(for: app, palette: palette).showRun(run, role: .final)
+        HomebrewUpdateWindowController.shared(for: app, palette: palette, theme: theme).showRun(run, role: .final)
     }
 
     /// True when the helper started this process, so its arguments are not a command line.

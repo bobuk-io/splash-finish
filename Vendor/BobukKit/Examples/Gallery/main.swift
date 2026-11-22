@@ -1,4 +1,5 @@
 import AppKit
+import BobukCore
 import SwiftUI
 import BobukUI
 import BobukUpdates
@@ -37,7 +38,8 @@ import BobukUpdates
         }.padding(.horizontal, 6).padding(.vertical, 4)
         Divider()
         ShortcutFooter([.init("↩", "open in this profile"), .init("⌘↩", "new window"),
-                        .init("↑↓", "choose"), .init("⌘C", "copy URL"), .init("esc", "close")], palette: palette)
+                        .init("↑↓", "choose"), .init("⌘C", "copy URL"), .init("esc", "close")],
+                       palette: palette, onSettings: {})
             .padding(16)
     }
     .foregroundStyle(Color(nsColor: palette.text))
@@ -99,6 +101,34 @@ import BobukUpdates
     print(output.path)
 }
 
+/// A themed settings window built with `ChromeWindow(theme:)`, `ThemeSettingsSection` and `.themedSurface`.
+@MainActor func renderThemedSettings(preset: ThemePreset, dark: Bool, output: URL) throws {
+    let suite = UserDefaults(suiteName: "bobukkit-gallery-\(UUID().uuidString)")!
+    let store = ThemeStore(defaults: suite, defaultAppearance: dark ? .dark : .light,
+                           defaultPreset: preset, appliesToApplication: false)
+    let window = ChromeWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 340), theme: store,
+                              resizable: false, showsTitle: true)
+    window.title = "Settings — \(preset.title)"
+    window.setContent(
+        VStack(alignment: .leading, spacing: 14) {
+            ThemeSettingsSection(theme: store)
+            Spacer(minLength: 0)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .themedSurface(store)
+    )
+    guard let view = window.contentView else { return }
+    view.layoutSubtreeIfNeeded()
+    view.displayIfNeeded()
+    guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { throw CocoaError(.fileWriteUnknown) }
+    view.cacheDisplay(in: view.bounds, to: bitmap)
+    guard let data = bitmap.representation(using: .png, properties: [:]) else { throw CocoaError(.fileWriteUnknown) }
+    try data.write(to: output)
+    window.close()
+    print(output.path)
+}
+
 let output = URL(fileURLWithPath: CommandLine.arguments.dropFirst().first ?? "/tmp/bobukkit-gallery", isDirectory: true)
 try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
 try MainActor.assumeIsolated {
@@ -108,5 +138,11 @@ try MainActor.assumeIsolated {
             try render(width: width, dark: dark, output: output.appendingPathComponent("picker-\(dark ? "dark" : "light")-\(Int(width)).png"))
         }
         try renderWindow(dark: dark, output: output.appendingPathComponent("window-\(dark ? "dark" : "light").png"))
+    }
+    for id in ["amber", "catppuccin", "kanagawa", "flexoki"] {
+        if let preset = ThemePreset.named(id) {
+            try renderThemedSettings(preset: preset, dark: true, output: output.appendingPathComponent("theme-\(id)-dark.png"))
+            try renderThemedSettings(preset: preset, dark: false, output: output.appendingPathComponent("theme-\(id)-light.png"))
+        }
     }
 }

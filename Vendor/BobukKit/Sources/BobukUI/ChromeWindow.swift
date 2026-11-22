@@ -143,6 +143,7 @@ import SwiftUI
     public var allowsFocus = true
     /// Layer colors are fixed CGColors: repaint when light/dark changes.
     private var appearanceObservation: NSKeyValueObservation?
+    nonisolated(unsafe) private var themeObserver: NSObjectProtocol?
 
     /// Duration of an animated chrome color change (lowkey's Tint mode).
     public static let styleAnimation: CFTimeInterval = 0.2
@@ -207,6 +208,36 @@ import SwiftUI
                                                name: NSWindow.didExitFullScreenNotification, object: self)
         NotificationCenter.default.addObserver(self, selector: #selector(fullScreenChanged),
                                                name: NSWindow.didEnterFullScreenNotification, object: self)
+    }
+
+    public convenience init(contentRect: NSRect, theme: ThemeStore, leading: [StripButton] = [],
+                            trailing: [StripButton] = [], resizable: Bool = true, showsTitle: Bool = false,
+                            accentHeight: CGFloat = ChromeMetrics.accentHeight) {
+        self.init(contentRect: contentRect, style: theme.chromeStyle, leading: leading, trailing: trailing,
+                  resizable: resizable, showsTitle: showsTitle, accentHeight: accentHeight)
+        bindTheme(theme)
+    }
+
+    deinit {
+        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
+    }
+
+    /// Keeps the window's chrome style and control appearance synchronized with a `ThemeStore`.
+    public func bindTheme(_ theme: ThemeStore, animated: Bool = false) {
+        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
+        let sync: @MainActor (Bool) -> Void = { [weak self, weak theme] shouldAnimate in
+            guard let self, let theme else { return }
+            self.appearance = theme.chromeAppearance
+            self.setChromeStyle(theme.chromeStyle, animated: shouldAnimate)
+        }
+        sync(false)
+        themeObserver = NotificationCenter.default.addObserver(
+            forName: ThemeStore.didChangeNotification,
+            object: theme,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { sync(animated) }
+        }
     }
 
     open override var canBecomeKey: Bool { allowsFocus }

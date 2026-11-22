@@ -57,6 +57,10 @@ struct PickerSelectionTests {
             Text("A row").frame(maxWidth: .infinity, alignment: .leading)
         }.frame(width: 300))
         #expect(abs(row.fittingSize.height - PickerMetrics.rowHeight) < 0.01)
+
+        let footerWithSettings = NSHostingView(rootView: ShortcutFooter([.init("esc", "close")],
+                                                                        palette: palette, onSettings: {}).frame(width: 300))
+        #expect(footerWithSettings.fittingSize.height >= 22)
     }
 }
 

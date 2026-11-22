@@ -9,6 +9,7 @@ struct MessagePreview: NSViewRepresentable {
     let text: String
     let size: CGFloat
     let color: NSColor
+    var linkColor: NSColor = BobukColors.amber
     let lines: Int
     let characterLimit: Int
     let onOpenSource: () -> Void
@@ -26,7 +27,7 @@ struct MessagePreview: NSViewRepresentable {
             if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
             if let url = run.link {
                 attributes[.link] = url
-                attributes[.foregroundColor] = NSColor.dynamic(light: 0x885500, dark: 0xF0C37A)
+                attributes[.foregroundColor] = linkColor
                 attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
             }
             result.append(NSAttributedString(string: String(parsed[run.range].characters), attributes: attributes))
@@ -40,7 +41,7 @@ struct MessagePreview: NSViewRepresentable {
         view.isSelectable = false
         view.drawsBackground = false
         view.linkTextAttributes = [
-            .foregroundColor: NSColor.dynamic(light: 0x885500, dark: 0xF0C37A),
+            .foregroundColor: linkColor,
             .underlineStyle: NSUnderlineStyle.single.rawValue
         ]
         view.textContainerInset = .zero
@@ -52,6 +53,10 @@ struct MessagePreview: NSViewRepresentable {
     }
 
     func updateNSView(_ view: PreviewTextView, context: Context) {
+        view.linkTextAttributes = [
+            .foregroundColor: linkColor,
+            .underlineStyle: NSUnderlineStyle.single.rawValue
+        ]
         let content = content
         if view.attributedString() != content { view.textStorage?.setAttributedString(content) }
         view.textContainer?.maximumNumberOfLines = lines

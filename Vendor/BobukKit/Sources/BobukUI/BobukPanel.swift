@@ -43,6 +43,7 @@ import BobukCore
     public var onCommandKey: ((NSEvent, EditCommand) -> Bool)?
     public private(set) var isDismissalSuspended = false
     private var deactivationObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var themeObserver: NSObjectProtocol?
 
     public init(contentRect: NSRect = NSRect(x: 0, y: 0, width: 480, height: 320), kind: Kind) {
         self.kind = kind
@@ -88,6 +89,24 @@ import BobukCore
 
     deinit {
         if let deactivationObserver { NotificationCenter.default.removeObserver(deactivationObserver) }
+        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
+    }
+
+    /// Keeps the panel's effective appearance synchronized with a `ThemeStore` (so native controls
+    /// and tooltips inside a custom-colored surface always match its luminance).
+    public func bindTheme(_ theme: ThemeStore) {
+        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
+        appearance = theme.chromeAppearance
+        themeObserver = NotificationCenter.default.addObserver(
+            forName: ThemeStore.didChangeNotification,
+            object: theme,
+            queue: .main
+        ) { [weak self, weak theme] _ in
+            MainActor.assumeIsolated {
+                guard let self, let theme else { return }
+                self.appearance = theme.chromeAppearance
+            }
+        }
     }
 
     open override var canBecomeKey: Bool { kind != .hud }

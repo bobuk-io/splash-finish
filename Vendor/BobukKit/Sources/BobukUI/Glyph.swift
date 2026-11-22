@@ -20,6 +20,8 @@ public enum Glyph: String, CaseIterable, Sendable {
     case check
     /// Three dots: more actions.
     case more
+    /// A gear: open Settings.
+    case settings
 
     /// Glyphs that destroy or dismiss: their strip button turns red on hover.
     public var isDestructive: Bool { self == .close || self == .terminate }
@@ -73,6 +75,14 @@ public enum Glyph: String, CaseIterable, Sendable {
             line((3.5, 8.5), (6.8, 11.8), (12.5, 4.5))
         case .more:
             for x in [4.0, 8.0, 12.0] as [CGFloat] { circle(x, 8, 0.6) }
+        case .settings:
+            circle(8, 8, 2.0)
+            circle(8, 8, 4.3)
+            for i in 0..<8 {
+                let angle = CGFloat(i) * .pi / 4
+                let c = cos(angle), s = sin(angle)
+                line((8 + 4.4 * c, 8 + 4.4 * s), (8 + 6.2 * c, 8 + 6.2 * s))
+            }
         }
         return path
     }

@@ -1,8 +1,11 @@
-import SwiftUI
+import BobukCore
+import BobukUI
 import SplashFinishCore
+import SwiftUI
 
 @MainActor struct IntegrationsView: View {
     let model: AppModel
+    var theme: ThemeStore = .splash
     @State private var statuses: [IntegrationStatus] = []
     @State private var message: String?
     @State private var richPi = false
@@ -36,19 +39,19 @@ import SplashFinishCore
         case .pi: return "pi"
         }
     }
-    private var header: some View {
+    private func header(tokens: ThemeTokens) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Text("Integrations").font(.title2.weight(.semibold))
-            Text("Check agent connections and update installed skills.").foregroundStyle(.secondary)
+            Text("Check agent connections and update installed skills.").foregroundStyle(tokens.mutedColor)
         }
     }
-    private func piDetails(_ status: IntegrationStatus) -> some View {
+    private func piDetails(_ status: IntegrationStatus, tokens: ThemeTokens) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Toggle("Answer pi-agent-ask questions here", isOn: $richPi).toggleStyle(.checkbox)
             Text(status.piAskDetected
                  ? "pi-agent-ask detected. Changes apply right away."
                  : "Not detected globally. Run: pi install npm:pi-agent-ask (project-local installs may still work).")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(tokens.mutedColor)
                 .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -56,35 +59,39 @@ import SplashFinishCore
         guard let date = status.lastEvent else { return Text("No event recorded yet") }
         return Text("Last event: \(date.formatted(date: .abbreviated, time: .shortened))")
     }
-    private func statusRow(_ status: IntegrationStatus) -> some View {
+    private func statusRow(_ status: IntegrationStatus, tokens: ThemeTokens, palette: PickerPalette) -> some View {
         let installed = status.state == .installed
         return HStack(alignment: .top, spacing: 12) {
             Image(systemName: installed ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                .foregroundStyle(installed ? .green : .orange)
+                .foregroundStyle(installed ? tokens.successColor : tokens.accentColor)
                 .frame(width: 20).padding(.top, 3)
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(displayName(status.agent)).font(.headline)
-                    Text(status.state.rawValue.capitalized).font(.caption).foregroundStyle(.secondary)
+                    Text(status.state.rawValue.capitalized).font(.caption).foregroundStyle(tokens.mutedColor)
                 }
-                Text(status.detail).font(.caption).foregroundStyle(.secondary)
+                Text(status.detail).font(.caption).foregroundStyle(tokens.mutedColor)
                     .fixedSize(horizontal: false, vertical: true)
-                if status.agent == .pi { piDetails(status) }
-                lastEventText(status).font(.caption).foregroundStyle(.secondary)
+                if status.agent == .pi { piDetails(status, tokens: tokens) }
+                lastEventText(status).font(.caption).foregroundStyle(tokens.mutedColor)
             }
             Spacer(minLength: 8)
             Button(status.state == .notInstalled ? "Install" : "Reinstall") { install(status.agent) }
+                .buttonStyle(QuietButtonStyle(palette: palette, prominent: !installed, height: 28))
                 .help("Install or update the \(status.agent.rawValue) integration")
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .controlBackgroundColor), in: .rect(cornerRadius: 8))
+        .background(tokens.elevatedColor, in: .rect(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(tokens.strokeColor, lineWidth: 1))
     }
-    private var footer: some View {
+    private func footer(tokens: ThemeTokens, palette: PickerPalette) -> some View {
         HStack {
-            Text("Codex hook trust cannot be checked automatically.").font(.caption).foregroundStyle(.secondary)
+            Text("Codex hook trust cannot be checked automatically.").font(.caption).foregroundStyle(tokens.mutedColor)
             Spacer()
-            Button("Refresh", action: refresh).keyboardShortcut("r", modifiers: .command)
+            Button("Refresh", action: refresh)
+                .buttonStyle(QuietButtonStyle(palette: palette, height: 28))
+                .keyboardShortcut("r", modifiers: .command)
         }
     }
     private func loadInitialState() {
@@ -94,19 +101,22 @@ import SplashFinishCore
         }
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            header
+        let tokens = theme.tokens
+        let palette = theme.pickerPalette
+        VStack(alignment: .leading, spacing: 16) {
+            header(tokens: tokens)
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    ForEach(statuses) { statusRow($0) }
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(statuses) { statusRow($0, tokens: tokens, palette: palette) }
                 }
             }
-            if let message { Text(message).font(.caption).textSelection(.enabled).foregroundStyle(.secondary) }
+            if let message { Text(message).font(.caption).textSelection(.enabled).foregroundStyle(tokens.mutedColor) }
             Spacer(minLength: 0)
-            footer
+            footer(tokens: tokens, palette: palette)
         }
-        .padding(24)
+        .padding(22)
         .frame(minWidth: 520, minHeight: 400)
+        .themedSurface(theme)
         .onAppear { loadInitialState() }
         // The checkbox applies immediately; Reinstall is not required for it.
         .onChange(of: richPi) { _, value in applyRichToggle(value) }

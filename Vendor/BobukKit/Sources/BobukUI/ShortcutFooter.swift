@@ -9,31 +9,49 @@ public struct ShortcutHint: Hashable, Identifiable {
 
 /// Each shortcut and its caption stay together; complete groups wrap onto another line.
 /// These are hints, never hidden keyboard handlers. Apps own all actual commands.
+/// Pass `onSettings` to show a trailing settings gear button in the footer bar.
 public struct ShortcutFooter: View {
     private let hints: [ShortcutHint]
     private let palette: PickerPalette
+    private let settingsLabel: String
+    private let settingsHelp: String
+    private let onSettings: (() -> Void)?
 
-    public init(_ hints: [ShortcutHint], palette: PickerPalette) {
+    public init(_ hints: [ShortcutHint],
+                palette: PickerPalette,
+                settingsLabel: String = "Settings",
+                settingsHelp: String = "Settings",
+                onSettings: (() -> Void)? = nil) {
         self.hints = hints
         self.palette = palette
+        self.settingsLabel = settingsLabel
+        self.settingsHelp = settingsHelp
+        self.onSettings = onSettings
     }
 
     public var body: some View {
-        HintFlowLayout {
-            ForEach(hints) { hint in
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(hint.keys).fontWeight(.medium).fixedSize()
-                        .foregroundStyle(Color(nsColor: palette.text))
-                    Text(hint.action).fixedSize(horizontal: false, vertical: true)
-                        .foregroundStyle(Color(nsColor: palette.secondary))
+        HStack(alignment: .center, spacing: 8) {
+            HintFlowLayout {
+                ForEach(hints) { hint in
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(hint.keys).fontWeight(.medium).fixedSize()
+                            .foregroundStyle(Color(nsColor: palette.text))
+                        Text(hint.action).fixedSize(horizontal: false, vertical: true)
+                            .foregroundStyle(Color(nsColor: palette.secondary))
+                    }
+                    .font(.system(size: PickerMetrics.footerFontSize, design: .monospaced))
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(hint.keys): \(hint.action)")
                 }
-                .font(.system(size: PickerMetrics.footerFontSize, design: .monospaced))
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("\(hint.keys): \(hint.action)")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .contain)
+
+            if let onSettings {
+                GlyphButton(.settings, label: settingsLabel, help: settingsHelp, palette: palette,
+                            width: 22, height: 22, glyphSize: 13, action: onSettings)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .contain)
     }
 }
 

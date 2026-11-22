@@ -1,4 +1,6 @@
 import AppKit
+import BobukCore
+import BobukUI
 import SwiftUI
 import Network
 import Darwin
@@ -110,25 +112,28 @@ private struct AnswerDraft {
 
 private struct PiQuestionItemView: View {
     let question: PiQuestion.Item
+    let tokens: ThemeTokens
     @Binding var draft: AnswerDraft
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text(question.label.uppercased()).font(.system(size: 9, weight: .semibold, design: .monospaced)).foregroundStyle(.secondary)
+            Text(question.label.uppercased()).font(.system(size: 9, weight: .semibold, design: .monospaced)).foregroundStyle(tokens.mutedColor)
             Text(question.prompt).font(.system(size: 15, weight: .medium)).fixedSize(horizontal: false, vertical: true)
             if let context = question.context, !context.isEmpty {
-                Text(context).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(context).font(.caption).foregroundStyle(tokens.mutedColor).fixedSize(horizontal: false, vertical: true)
             }
             ForEach(Array(question.options.enumerated()), id: \.element.id) { index, option in
+                let isSelected = draft.values.contains(option.value)
                 Button {
                     if question.type == "multi" {
                         if draft.values.contains(option.value) { draft.values.remove(option.value) } else { draft.values.insert(option.value) }
                     } else { draft.values = [option.value]; draft.customText = "" }
                 } label: {
                     HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: draft.values.contains(option.value) ? (question.type == "multi" ? "checkmark.square.fill" : "largecircle.fill.circle") : (question.type == "multi" ? "square" : "circle"))
+                        Image(systemName: isSelected ? (question.type == "multi" ? "checkmark.square.fill" : "largecircle.fill.circle") : (question.type == "multi" ? "square" : "circle"))
+                            .foregroundStyle(isSelected ? tokens.accentColor : tokens.mutedColor)
                         VStack(alignment: .leading, spacing: 3) {
-                            HStack { Text(option.label); if option.recommended == true { Text("Recommended").font(.caption).foregroundStyle(.secondary) } }
-                            if let description = option.description, !description.isEmpty { Text(description).font(.caption).foregroundStyle(.secondary) }
+                            HStack { Text(option.label); if option.recommended == true { Text("Recommended").font(.caption).foregroundStyle(tokens.mutedColor) } }
+                            if let description = option.description, !description.isEmpty { Text(description).font(.caption).foregroundStyle(tokens.mutedColor) }
                         }
                         Spacer()
                     }.contentShape(Rectangle())
@@ -136,7 +141,7 @@ private struct PiQuestionItemView: View {
                     // ⌘1…⌘9 select options without stealing plain digits from text fields.
                     .keyboardShortcut(index < 9 ? KeyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: .command) : nil)
                     .help(index < 9 ? "\(option.label) (⌘\(index + 1))" : option.label)
-                if draft.values.contains(option.value) {
+                if isSelected {
                     TextField("Option note (optional)", text: Binding(get: { draft.optionNotes[option.value] ?? "" }, set: { draft.optionNotes[option.value] = $0 }))
                         .textFieldStyle(.roundedBorder).padding(.leading, 20)
                 }
@@ -155,6 +160,8 @@ struct PiQuestionView: View {
     let usePi: () -> Void
     let submitting: Bool
     let error: String?
+    var tokens: ThemeTokens = ThemeTokens(colors: ThemePreset.amber.colors(dark: true))
+    var palette: PickerPalette = .bobukAmber
     @State private var drafts: [String: AnswerDraft] = [:]
     private var canSubmit: Bool { question.questions.allSatisfy { drafts[$0.id]?.hasAnswer == true } }
     var body: some View {
@@ -162,16 +169,18 @@ struct PiQuestionView: View {
             HStack {
                 Text("PI / \(question.project.uppercased())").font(.system(size: 10, weight: .semibold, design: .monospaced))
                 Spacer()
-                Text("PI-AGENT-ASK").font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
+                Text("PI-AGENT-ASK").font(.system(size: 9, design: .monospaced)).foregroundStyle(tokens.mutedColor)
             }
             if let title = question.title, !title.isEmpty { Text(title).font(.headline) }
             ForEach(question.questions) { item in
-                PiQuestionItemView(question: item, draft: Binding(get: { drafts[item.id] ?? AnswerDraft() }, set: { drafts[item.id] = $0 }))
-                if item.id != question.questions.last?.id { Divider() }
+                PiQuestionItemView(question: item, tokens: tokens, draft: Binding(get: { drafts[item.id] ?? AnswerDraft() }, set: { drafts[item.id] = $0 }))
+                if item.id != question.questions.last?.id { Rectangle().fill(tokens.strokeColor).frame(height: 1) }
             }
-            if let error { Text(error).font(.caption).foregroundStyle(.orange) }
+            if let error { Text(error).font(.caption).foregroundStyle(tokens.dangerColor) }
             HStack {
-                Button("Answer in pi", action: usePi).help("Close this card and continue in the original pi dialog")
+                Button("Answer in pi", action: usePi)
+                    .buttonStyle(QuietButtonStyle(palette: palette, height: 28))
+                    .help("Close this card and continue in the original pi dialog")
                 Spacer()
                 Button(submitting ? "Submitting…" : "Submit") {
                     var answers = [String: [String: Any]]()
@@ -187,10 +196,13 @@ struct PiQuestionView: View {
                         answers[item.id] = answer
                     }
                     submit(["kind": "answer", "answers": answers])
-                }.disabled(!canSubmit || submitting)
+                }.buttonStyle(QuietButtonStyle(palette: palette, prominent: true, height: 28))
+                    .disabled(!canSubmit || submitting)
                     .keyboardShortcut(.return, modifiers: .command)
                     .help("Submit the answers to pi (⌘⏎)")
             }
-        }.padding(12).background(Color.panelInk.opacity(0.05), in: .rect(cornerRadius: 8))
+        }.padding(12)
+            .background(tokens.elevatedColor, in: .rect(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(tokens.strokeColor, lineWidth: 1))
     }
 }

@@ -7,12 +7,21 @@ import BobukCore
 @MainActor public final class ToastController {
     private var panel: BobukPanel?
     private var hideWork: DispatchWorkItem?
-    private let palette: PickerPalette
+    private let staticPalette: PickerPalette
+    private let theme: ThemeStore?
     private let mark: AnyView?
 
     /// `mark` is the app's small logo before the text.
     public init(palette: PickerPalette, mark: AnyView? = nil) {
-        self.palette = palette
+        self.staticPalette = palette
+        self.theme = nil
+        self.mark = mark
+    }
+
+    /// Uses live colors from `theme` each time a toast is shown.
+    public init(theme: ThemeStore, mark: AnyView? = nil) {
+        self.staticPalette = theme.pickerPalette
+        self.theme = theme
         self.mark = mark
     }
 
@@ -20,7 +29,9 @@ import BobukCore
 
     public func show(_ message: String, duration: TimeInterval = 3) {
         let panel = self.panel ?? BobukPanel(contentRect: .zero, kind: .hud)
+        if let theme { panel.appearance = theme.chromeAppearance }
         self.panel = panel
+        let palette = theme?.pickerPalette ?? staticPalette
         let hosting = NSHostingView(rootView: ToastView(message: message, palette: palette, mark: mark))
         panel.contentView = hosting
         panel.place(size: hosting.fittingSize, anchor: .top(inset: 80), margin: 0, display: true)

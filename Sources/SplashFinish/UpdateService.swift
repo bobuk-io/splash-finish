@@ -31,5 +31,5 @@ extension AppUpdateIdentity {
 
 extension UpdateService {
     /// The one update action of the menu-bar menu.
-    static let shared = UpdateService.detect(app: .splashFinish, palette: .splash, makeSparkle: { SparkleUpdater() })
+    static let shared = UpdateService.detect(app: .splashFinish, theme: .splash, makeSparkle: { SparkleUpdater() })
 }

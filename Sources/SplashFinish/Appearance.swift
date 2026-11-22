@@ -1,71 +1,72 @@
 import AppKit
-import SwiftUI
+import BobukCore
 import BobukSystem
 import BobukUI
+import SwiftUI
 
 extension AppearanceChoice {
     /// Kept from earlier versions, which saved "light" or "dark" here.
     static let defaultsKey = "appTheme"
-    /// Settings offers Light and Dark only.
-    static let offered: [AppearanceChoice] = [.light, .dark]
-    /// The saved choice; the inbox stays dark until the user chooses Light.
+    /// Settings offers System, Light and Dark.
+    static let offered: [AppearanceChoice] = AppearanceChoice.allCases
+    /// The saved choice; the inbox stays dark until the user chooses System or Light.
     static var saved: AppearanceChoice { stored(key: defaultsKey, fallback: .dark) }
 }
 
-extension NSColor {
-    /// Splash Finish's ink is pure white in the dark theme, unlike `BobukColors.ink`.
-    static let panelInk = NSColor.dynamic(light: 0x222A2E, dark: 0xFFFFFF)
-}
+@MainActor extension ThemeStore {
+    static let splashKeys = StorageKeys(appearance: AppearanceChoice.defaultsKey, palette: "appThemePalette")
 
-extension Color {
-    static var panelInk: Color { Color(nsColor: .panelInk) }
-    static var panelMuted: Color { Color(nsColor: BobukColors.muted) }
-    static var panelAccent: Color { Color(nsColor: BobukColors.amber) }
+    /// Shared per-app theme store for Splash Finish: preserves the legacy `appTheme` key,
+    /// defaults to Dark + Amber, and persists custom/preset palettes in UserDefaults.
+    static let splash = ThemeStore(
+        keys: splashKeys,
+        defaultAppearance: .dark,
+        defaultPreset: .amber
+    )
 }
 
 extension PickerPalette {
-    /// The inbox palette: the shared graphite and amber with Splash Finish's ink and a stronger
-    /// border when the system asks for more contrast.
-    static func splash(increasedContrast: Bool) -> PickerPalette {
-        PickerPalette(surface: BobukColors.panel, text: .panelInk, secondary: BobukColors.muted,
-                      accent: BobukColors.amber,
-                      border: increasedContrast ? .dynamic(light: 0x46545B, dark: 0xA0B0B4) : BobukColors.stroke,
-                      badgeInk: .textColor)
+    /// The active inbox palette for Splash Finish, respecting accessibility contrast.
+    @MainActor static func splash(increasedContrast: Bool) -> PickerPalette {
+        ThemeStore.splash.tokens.pickerPalette(increasedContrast: increasedContrast)
     }
 
-    /// The palette for the current accessibility setting (update window).
-    @MainActor static var splash: PickerPalette {
-        splash(increasedContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast)
-    }
+    @MainActor static var splash: PickerPalette { ThemeStore.splash.pickerPalette }
 }
 
 extension ChromeStyle {
-    /// Settings and Integrations hold native forms: system chrome with the Splash Finish accent.
-    static var splashWindow: ChromeStyle {
-        var style = ChromeStyle.system
-        style.accent = BobukColors.amber
-        return style
-    }
+    /// Window chrome matching Splash Finish's active theme.
+    @MainActor static var splashWindow: ChromeStyle { ThemeStore.splash.chromeStyle }
 }
 
-struct SettingsView: View {
+@MainActor struct SettingsView: View {
     let model: AppModel
+    var theme: ThemeStore = .splash
     let installSkills: () -> Void
     let uninstallSkills: () -> Void
-    @AppStorage(AppearanceChoice.defaultsKey) private var theme = AppearanceChoice.dark.rawValue
     @State private var startsAtLogin = LoginItem.isEnabled
 
-    var body: some View {
-        Form {
-            Picker("Appearance", selection: $theme) {
-                ForEach(AppearanceChoice.offered) { choice in
-                    Text(choice.title).tag(choice.rawValue)
-                }
-            }
-            .pickerStyle(.segmented)
+    private func toggleRow(_ title: String, isOn: Binding<Bool>) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 13))
+                .foregroundStyle(theme.tokens.inkColor)
+            Spacer(minLength: 12)
+            Toggle(title, isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+        }
+    }
 
-            Section("General") {
-                Toggle("Start at Login", isOn: Binding(
+    var body: some View {
+        let tokens = theme.tokens
+        let palette = theme.pickerPalette
+        VStack(alignment: .leading, spacing: 14) {
+            ThemeSettingsSection(theme: theme, offeredAppearances: AppearanceChoice.offered)
+
+            ThemedSection("General", tokens: tokens) {
+                toggleRow("Start at Login", isOn: Binding(
                     get: { startsAtLogin },
                     set: { value in
                         // Opens Login Items in System Settings when macOS asks for approval.
@@ -73,7 +74,8 @@ struct SettingsView: View {
                         startsAtLogin = LoginItem.isEnabled
                     }
                 ))
-                Toggle("Respect Do Not Disturb", isOn: Binding(
+                Rectangle().fill(tokens.strokeColor).frame(height: 1)
+                toggleRow("Respect Do Not Disturb", isOn: Binding(
                     get: { model.respectFocus },
                     set: { value in
                         model.respectFocus = value
@@ -82,16 +84,21 @@ struct SettingsView: View {
                 ))
             }
 
-            Section("Agent Skills") {
-                HStack {
+            ThemedSection("Agent Skills", tokens: tokens) {
+                HStack(spacing: 10) {
                     Button("Install Agent Skills…", action: installSkills)
+                        .buttonStyle(QuietButtonStyle(palette: palette, height: 28))
                     Button("Uninstall Agent Skills…", action: uninstallSkills)
+                        .buttonStyle(QuietButtonStyle(palette: palette, height: 28))
+                    Spacer(minLength: 0)
                 }
             }
+
+            Spacer(minLength: 0)
         }
-        .formStyle(.grouped)
-        .frame(width: 440, height: 300)
-        .onChange(of: theme) { _, _ in AppearanceChoice.saved.apply() }
+        .padding(18)
+        .frame(width: 460, height: 550, alignment: .topLeading)
+        .themedSurface(theme)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             startsAtLogin = LoginItem.isEnabled
         }

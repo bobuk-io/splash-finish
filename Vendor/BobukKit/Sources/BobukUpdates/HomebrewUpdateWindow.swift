@@ -53,9 +53,10 @@ public final class HomebrewUpdateWindowController: NSObject, NSWindowDelegate {
     private static var controllers: [String: HomebrewUpdateWindowController] = [:]
 
     /// One controller per app in a process.
-    public static func shared(for app: AppUpdateIdentity, palette: PickerPalette = .system) -> HomebrewUpdateWindowController {
+    public static func shared(for app: AppUpdateIdentity, palette: PickerPalette = .system,
+                              theme: ThemeStore? = nil) -> HomebrewUpdateWindowController {
         if let existing = controllers[app.bundleIdentifier] { return existing }
-        let controller = HomebrewUpdateWindowController(app: app, palette: palette)
+        let controller = HomebrewUpdateWindowController(app: app, palette: palette, theme: theme)
         controllers[app.bundleIdentifier] = controller
         return controller
     }
@@ -63,15 +64,17 @@ public final class HomebrewUpdateWindowController: NSObject, NSWindowDelegate {
     public let app: AppUpdateIdentity
     public let model: HomebrewUpdateModel
     private let palette: PickerPalette
+    private let theme: ThemeStore?
     private var window: ChromeWindow?
     private var runner: HomebrewUpdateRunner?
     private var role: HomebrewUpdateRole = .owner
     /// Replaced by tests; quits the app so the helper can start the installed copy.
     public var terminate: @MainActor () -> Void = { NSApp.terminate(nil) }
 
-    public init(app: AppUpdateIdentity, palette: PickerPalette = .system) {
+    public init(app: AppUpdateIdentity, palette: PickerPalette = .system, theme: ThemeStore? = nil) {
         self.app = app
         self.palette = palette
+        self.theme = theme
         model = HomebrewUpdateModel(appName: app.displayName)
     }
 
@@ -140,12 +143,14 @@ public final class HomebrewUpdateWindowController: NSObject, NSWindowDelegate {
     }
 
     private func makeWindow() -> ChromeWindow {
+        let initialStyle = theme?.chromeStyle ?? palette.chromeStyle
         let window = ChromeWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 420),
-                                  style: palette.chromeStyle, showsTitle: true)
+                                  style: initialStyle, showsTitle: true)
+        if let theme { window.bindTheme(theme) }
         window.title = "Update \(app.displayName) via Homebrew"
         window.minSize = NSSize(width: 520, height: 340)
         window.delegate = self
-        window.setContent(HomebrewUpdateView(model: model, notice: app.keptNotice, palette: palette,
+        window.setContent(HomebrewUpdateView(model: model, notice: app.keptNotice, palette: palette, theme: theme,
                                              cancel: { [weak self] in self?.cancel() },
                                              close: { [weak window] in window?.performClose(nil) }))
         self.window = window
@@ -157,34 +162,39 @@ private struct HomebrewUpdateView: View {
     let model: HomebrewUpdateModel
     let notice: String
     let palette: PickerPalette
+    let theme: ThemeStore?
     let cancel: () -> Void
     let close: () -> Void
 
+    private var activePalette: PickerPalette { theme?.pickerPalette ?? palette }
+
     var body: some View {
+        let current = activePalette
+        let logBackground = theme.map { $0.tokens.fieldColor } ?? Color(nsColor: .textBackgroundColor)
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 if model.phase == .running || model.restarting { ProgressView().controlSize(.small) }
                 Text(model.title).font(.headline)
-                    .foregroundStyle(Color(nsColor: model.phase == .running || model.succeeded ? palette.text : palette.accent))
+                    .foregroundStyle(Color(nsColor: model.phase == .running || model.succeeded ? current.text : current.accent))
             }
             Text(model.command)
                 .font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
                 .padding(6).frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(nsColor: palette.text).opacity(0.07), in: RoundedRectangle(cornerRadius: 4))
+                .background(Color(nsColor: current.text).opacity(0.07), in: RoundedRectangle(cornerRadius: 4))
             ScrollViewReader { proxy in
                 ScrollView {
                     Text(model.output.isEmpty ? "Waiting for brew…" : model.output)
                         .font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
-                        .foregroundStyle(Color(nsColor: model.output.isEmpty ? palette.secondary : palette.text))
+                        .foregroundStyle(Color(nsColor: model.output.isEmpty ? current.secondary : current.text))
                         .frame(maxWidth: .infinity, alignment: .leading).padding(6)
                     Color.clear.frame(height: 1).id("end")
                 }
-                .background(Color(nsColor: .textBackgroundColor))
+                .background(logBackground, in: RoundedRectangle(cornerRadius: 4))
                 .onChange(of: model.output) { proxy.scrollTo("end", anchor: .bottom) }
             }
             HStack {
                 Text("Only \(model.appName) is updated. \(notice)")
-                    .font(.caption).foregroundStyle(Color(nsColor: palette.secondary))
+                    .font(.caption).foregroundStyle(Color(nsColor: current.secondary))
                 Spacer()
                 if model.phase == .running {
                     Button("Cancel", action: cancel)
@@ -195,6 +205,9 @@ private struct HomebrewUpdateView: View {
         }
         .padding(16)
         .frame(minWidth: 520, minHeight: 300)
+        .foregroundStyle(Color(nsColor: current.text))
+        .tint(Color(nsColor: current.accent))
+        .background(Color(nsColor: current.surface))
     }
 }
 
@@ -203,10 +216,12 @@ private struct HomebrewUpdateView: View {
 /// window: no menu-bar icon, no hotkey, no configuration, no Sparkle.
 @MainActor
 public enum HomebrewUpdateViewer {
-    public static func run(_ directory: URL, app: AppUpdateIdentity, palette: PickerPalette = .system) -> Never {
+    public static func run(_ directory: URL, app: AppUpdateIdentity, palette: PickerPalette = .system,
+                           theme: ThemeStore? = nil) -> Never {
         let application = NSApplication.shared
         application.setActivationPolicy(.accessory)
-        HomebrewUpdateWindowController.shared(for: app, palette: palette).showRun(directory, role: .viewer)
+        theme?.apply()
+        HomebrewUpdateWindowController.shared(for: app, palette: palette, theme: theme).showRun(directory, role: .viewer)
         application.run()
         exit(0)
     }

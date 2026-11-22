@@ -22,11 +22,12 @@ need it, add it here, not to the app. Agents: read `AGENTS.md`.
 | ⌘C/⌘V/⌘Z in a non-activating panel, ⌘Q must not quit | built into `BobukPanel`; `EditCommand.classify` | BobukUI |
 | Which screen and where a panel appears | `window.place(size:anchor:)`, `Screens.underPointer`, `PanelPlacement` | BobukUI / BobukCore |
 | Grow a panel with its content, top edge fixed | `window.fitHeight(to:)`, `PanelPlacement.resize` | BobukUI / BobukCore |
-| Line icons (close, back, lock, reload, plus, check…) | `Glyph`, `GlyphView` (AppKit), `GlyphImage` (SwiftUI) | BobukUI |
+| Line icons (close, back, lock, reload, plus, check, settings…) | `Glyph`, `GlyphView` (AppKit), `GlyphImage` (SwiftUI) | BobukUI |
 | An icon action inside content (dismiss a card, remove a row) | `GlyphButton` (SwiftUI; square or `width:height:glyphSize:hoverFill:`, separate `help:`) | BobukUI |
-| Picker rows, badges, search field, shortcut hints, panel frame | `PickerRow`, `PickerBadge`, `PickerSearchField`, `ShortcutFooter`, `.pickerPanel`, `PickerSurfaceView` | BobukUI |
+| Picker rows, badges, search field, shortcut hints (+ optional Settings gear), panel frame | `PickerRow`, `PickerBadge`, `PickerSearchField`, `ShortcutFooter(..., onSettings:)`, `.pickerPanel`, `PickerSurfaceView` | BobukUI |
 | Light/dark colors from hex, the shared amber palette | `NSColor.dynamic(light:dark:)`, `BobukColors`, `PickerPalette.bobukAmber` | BobukUI |
 | App-wide Light/Dark/System setting | `AppearanceChoice` (`apply()`, `stored(in:key:)`) | BobukUI |
+| Color themes: curated presets, custom panel/accent, derived WCAG tokens, live store & Settings UI | `RGB`, `ThemePreset`, `ThemeColors`, `ThemePaletteConfig`, `ThemeTokens`, `ThemeStore`, `ThemedSection`, `ThemeSettingsSection`, `ThemePreview`, `.themedSurface(_:)`, `ChromeWindow.bindTheme`, `BobukPanel.bindTheme` | BobukCore / BobukUI |
 | Small bordered or accent button, mono caps label | `QuietButtonStyle(palette:prominent:)`, `MonoLabel` | BobukUI |
 | A short message near the top of the screen | `ToastController` | BobukUI |
 | Global hotkey (no Accessibility permission) | `GlobalHotkeyCenter(signature:)` | BobukSystem |

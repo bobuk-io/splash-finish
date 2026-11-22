@@ -1,10 +1,11 @@
 import AppKit
-import SwiftUI
-import SplashFinishCore
+import BobukCore
 import BobukUI
+import SplashFinishCore
+import SwiftUI
 
 struct FinishMark: View {
-    var color = Color.panelAccent
+    var color: Color
     var body: some View {
         HStack(spacing: 3) {
             Capsule().frame(width: 4, height: 11).offset(y: 4)
@@ -30,9 +31,9 @@ private struct NotificationRow: View {
     let onOpen: () -> Void
     let onDismiss: () -> Void
     let selected: Bool
+    let tokens: ThemeTokens
     let palette: PickerPalette
     @State private var hovered = false
-    private let muted = Color.panelMuted
     private var sourceAction: String {
         if event.source?.url != nil { return "Open source session" }
         if event.source?.rex != nil { return "Open original Rex terminal pane" }
@@ -44,60 +45,62 @@ private struct NotificationRow: View {
         return "Source unavailable"
     }
     var body: some View {
+        let muted = tokens.mutedColor
+        let ink = tokens.inkColor
         HStack(alignment: .top, spacing: 9) {
             // Links, source navigation and dismiss have separate hit targets.
             HStack(alignment: .top, spacing: 14) {
-                    VStack(spacing: 8) {
-                        Image(systemName: event.status == .attention ? "exclamationmark" : "checkmark")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(event.status == .attention ? Color.panelAccent : Color.dynamic(light: 0x286444, dark: 0x9CC9AE))
-                            .frame(width: 23, height: 23)
-                            .background(event.status == .attention ? Color.dynamic(light: 0xF4E7CF, dark: 0x51442F) : Color.dynamic(light: 0xDCEDE2, dark: 0x2E403A), in: .circle)
-                        Rectangle().fill(Color.panelInk.opacity(0.09)).frame(width: 1, height: 39)
+                VStack(spacing: 8) {
+                    Image(systemName: event.status == .attention ? "exclamationmark" : "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(event.status == .attention ? tokens.accentColor : tokens.successColor)
+                        .frame(width: 23, height: 23)
+                        .background(event.status == .attention ? tokens.accentSurfaceColor : tokens.successSurfaceColor, in: .circle)
+                    Rectangle().fill(ink.opacity(0.09)).frame(width: 1, height: 39)
+                }.allowsHitTesting(false)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 7) {
+                        MonoLabel(event.agent, size: 10, tracking: 1)
+                            .foregroundStyle(ink.opacity(0.82))
+                            .lineLimit(1)
+                        if !event.project.isEmpty {
+                            Text("/ " + event.project).font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(muted).lineLimit(1).truncationMode(.middle)
+                        }
                     }.allowsHitTesting(false)
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 7) {
-                            MonoLabel(event.agent, size: 10, tracking: 1)
-                                .foregroundStyle(Color.dynamic(light: 0x46545B, dark: 0xC1C9CD))
-                                .lineLimit(1)
-                            if !event.project.isEmpty {
-                                Text("/ " + event.project).font(.system(size: 10, design: .monospaced))
-                                    .foregroundStyle(muted).lineLimit(1).truncationMode(.middle)
-                            }
-                        }.allowsHitTesting(false)
-                        MessagePreview(text: event.title, size: 16,
-                            color: BobukColors.ink,
-                            lines: 2, characterLimit: 160, onOpenSource: onOpen)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        HStack(spacing: 5) {
-                            if !event.detail.isEmpty {
-                                MessagePreview(text: event.detail, size: 11,
-                                    color: BobukColors.muted,
-                                    lines: 1, characterLimit: 400, onOpenSource: onOpen)
-                                Text("·").allowsHitTesting(false)
-                            }
-                            AgeText(date: event.date).allowsHitTesting(false)
-                        }.font(.system(size: 11)).foregroundStyle(muted)
-                    }.padding(.top, 3)
-                    Spacer(minLength: 0)
-                    Button(action: onOpen) {
-                        Image(systemName: "arrow.up.right").font(.system(size: 12))
-                            .foregroundStyle(hovered ? Color.panelInk : muted)
-                    }.buttonStyle(.plain).padding(.top, 25).accessibilityLabel(sourceAction)
-                }.padding(.vertical, 4)
-                .background {
-                    Button(action: onOpen) { Color.clear.contentShape(.rect) }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("\(sourceAction): \(event.agent), \(MessageText.plain(event.title, limit: 160))")
-                }
-                .onHover { hovered = $0 }
-                .help("\(sourceAction) · \(MessageText.plain(event.title)) · \(event.date.formatted(date: .abbreviated, time: .shortened))")
+                    MessagePreview(text: event.title, size: 16,
+                        color: tokens.inkNSColor, linkColor: tokens.accentNSColor,
+                        lines: 2, characterLimit: 160, onOpenSource: onOpen)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(spacing: 5) {
+                        if !event.detail.isEmpty {
+                            MessagePreview(text: event.detail, size: 11,
+                                color: tokens.mutedNSColor, linkColor: tokens.accentNSColor,
+                                lines: 1, characterLimit: 400, onOpenSource: onOpen)
+                            Text("·").allowsHitTesting(false)
+                        }
+                        AgeText(date: event.date).allowsHitTesting(false)
+                    }.font(.system(size: 11)).foregroundStyle(muted)
+                }.padding(.top, 3)
+                Spacer(minLength: 0)
+                Button(action: onOpen) {
+                    Image(systemName: "arrow.up.right").font(.system(size: 12))
+                        .foregroundStyle(hovered ? ink : muted)
+                }.buttonStyle(.plain).padding(.top, 25).accessibilityLabel(sourceAction)
+            }.padding(.vertical, 4)
+            .background {
+                Button(action: onOpen) { Color.clear.contentShape(.rect) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(sourceAction): \(event.agent), \(MessageText.plain(event.title, limit: 160))")
+            }
+            .onHover { hovered = $0 }
+            .help("\(sourceAction) · \(MessageText.plain(event.title)) · \(event.date.formatted(date: .abbreviated, time: .shortened))")
             GlyphButton(.close, label: "Dismiss \(event.agent): \(MessageText.plain(event.title, limit: 160))",
                         help: "Dismiss notification", palette: palette, size: 24, action: onDismiss)
                 .padding(.top, 22)
         }.padding(.horizontal, 4)
-            .background(Color.panelInk.opacity(selected ? 0.09 : hovered ? 0.025 : 0), in: .rect(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.panelInk.opacity(selected ? 0.17 : 0)))
+            .background(ink.opacity(selected ? 0.09 : hovered ? 0.035 : 0), in: .rect(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(ink.opacity(selected ? 0.17 : 0)))
             .accessibilityAddTraits(selected ? .isSelected : [])
             .contextMenu {
                 Button("Open Source", action: onOpen)
@@ -138,10 +141,15 @@ struct InboxList<Content: View>: View {
 
 @MainActor struct PanelView: View {
     let model: AppModel
+    var theme: ThemeStore = .splash
     let onOpen: (AgentEvent) -> Void
     let onSize: (CGSize) -> Void
+    var onSettings: (() -> Void)? = nil
     @Environment(\.colorSchemeContrast) private var contrast
-    private let muted = Color.panelMuted
+    private var tokens: ThemeTokens { theme.tokens }
+    private var pickerPalette: PickerPalette {
+        tokens.pickerPalette(increasedContrast: contrast == .increased || theme.increasedContrast)
+    }
     private var headline: String {
         if model.items.isEmpty { return "You're all caught up." }
         return model.completed.isEmpty ? "Your agents need you." : "Your agents are back."
@@ -150,8 +158,7 @@ struct InboxList<Content: View>: View {
         if model.items.isEmpty { return "We'll let you know when an agent needs you." }
         return "\(model.attention.count) \(model.attention.count == 1 ? "needs" : "need") attention · \(model.completed.count) completed"
     }
-    private var pickerPalette: PickerPalette { .splash(increasedContrast: contrast == .increased) }
-    private func group(_ label: String, items: [AgentEvent], color: Color) -> some View {
+    private func group(_ label: String, items: [AgentEvent], color: Color, tokens: ThemeTokens, palette: PickerPalette) -> some View {
         VStack(alignment: .leading, spacing: 15) {
             HStack(spacing: 10) {
                 MonoLabel(label, size: 9)
@@ -163,24 +170,27 @@ struct InboxList<Content: View>: View {
                     if let id = model.questionID(for: event), let question = model.questions[id] {
                         PiQuestionView(question: question, submit: { model.answerQuestion(id: id, value: $0) },
                                        usePi: { model.usePi(id: id) }, submitting: model.submittingQuestions.contains(id),
-                                       error: model.questionErrors[id]).id(event.key)
+                                       error: model.questionErrors[id], tokens: tokens, palette: palette).id(event.key)
                     } else {
                         NotificationRow(event: event, onOpen: { onOpen(event) }, onDismiss: { model.dismiss(event) },
-                                        selected: model.selectedKey == event.key, palette: pickerPalette).id(event.key)
+                                        selected: model.selectedKey == event.key, tokens: tokens, palette: palette).id(event.key)
                     }
                 }
             }
         }
     }
     var body: some View {
+        let tokens = self.tokens
+        let palette = self.pickerPalette
+        let muted = tokens.mutedColor
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 HStack(spacing: 9) {
-                    FinishMark().scaleEffect(0.8).frame(width: 20)
+                    FinishMark(color: tokens.accentColor).scaleEffect(0.8).frame(width: 20)
                     MonoLabel("Splash Finish", size: 11, tracking: 2)
                 }
                 Spacer()
-                Circle().fill(Color.panelAccent).frame(width: 5, height: 5)
+                Circle().fill(tokens.accentColor).frame(width: 5, height: 5)
                 MonoLabel(String(format: "%02d / inbox", model.items.count), weight: .regular, tracking: 1)
                     .foregroundStyle(muted)
             }
@@ -189,7 +199,16 @@ struct InboxList<Content: View>: View {
             Text(subtitle).font(.system(size: 12)).foregroundStyle(muted).padding(.top, 7)
             if !model.items.isEmpty {
                 ScrollViewReader { proxy in
-                    InboxList(maxHeight: model.maxListHeight) { groups }
+                    InboxList(maxHeight: model.maxListHeight) {
+                        VStack(spacing: 22) {
+                            if !model.attention.isEmpty {
+                                group("NEEDS ATTENTION", items: model.attention, color: tokens.accentColor, tokens: tokens, palette: palette)
+                            }
+                            if !model.completed.isEmpty {
+                                group("COMPLETED", items: model.completed, color: muted, tokens: tokens, palette: palette)
+                            }
+                        }
+                    }
                     .onChange(of: model.selectedKey) { _, key in
                         if let key { proxy.scrollTo(key, anchor: .center) }
                     }
@@ -200,7 +219,7 @@ struct InboxList<Content: View>: View {
                     Text("Nothing waiting. You're free to focus.")
                 }.font(.system(size: 12)).foregroundStyle(muted).padding(.vertical, 28)
             }
-            Rectangle().fill(Color.panelInk.opacity(0.12)).frame(height: 1).padding(.top, 17)
+            Rectangle().fill(tokens.strokeColor).frame(height: 1).padding(.top, 17)
             HStack {
                 Button { model.snooze() } label: {
                     HStack(spacing: 7) {
@@ -208,23 +227,32 @@ struct InboxList<Content: View>: View {
                         Text("Snooze")
                         Text("15m").foregroundStyle(muted).padding(.leading, 3)
                     }
-                }.buttonStyle(QuietButtonStyle(palette: pickerPalette, height: 33)).disabled(model.items.isEmpty)
+                }.buttonStyle(QuietButtonStyle(palette: palette, height: 33)).disabled(model.items.isEmpty)
                     .keyboardShortcut(.cancelAction)
                     .help("Hide for 15 minutes; new events still collect · Esc")
                 Spacer()
                 Button("Clear all", action: model.clear)
-                    .buttonStyle(QuietButtonStyle(palette: pickerPalette, height: 33)).keyboardShortcut("w", modifiers: .command)
+                    .buttonStyle(QuietButtonStyle(palette: palette, height: 33)).keyboardShortcut("w", modifiers: .command)
                     .help("Clear notifications; pending questions remain · Backspace or ⌘W")
             }.padding(.top, 17)
             if let message = model.message {
-                Text(message).font(.system(size: 10)).foregroundStyle(Color.panelAccent)
-                    .lineLimit(2).padding(.top, 13)
+                HStack(alignment: .center, spacing: 8) {
+                    Text(message).font(.system(size: 10)).foregroundStyle(tokens.accentColor)
+                        .lineLimit(2)
+                    Spacer(minLength: 0)
+                    if let onSettings {
+                        GlyphButton(.settings, label: "Settings", help: "Settings · ⌘,", palette: palette,
+                                    width: 22, height: 22, glyphSize: 13, action: onSettings)
+                    }
+                }.padding(.top, 13)
             } else {
-                ShortcutFooter(footerHints, palette: pickerPalette).padding(.top, 13)
+                ShortcutFooter(footerHints, palette: palette, settingsHelp: "Settings · ⌘,", onSettings: onSettings)
+                    .padding(.top, 13)
             }
         }.padding(25).frame(width: 470)
-            .foregroundStyle(Color.dynamic(light: 0x222A2E, dark: 0xE9EEE9))
-            .pickerPanel(palette: pickerPalette)
+            .foregroundStyle(tokens.inkColor)
+            .tint(tokens.accentColor)
+            .pickerPanel(palette: palette)
             .fixedSize(horizontal: true, vertical: true)
             .background(GeometryReader { proxy in
                 Color.clear.onChange(of: proxy.size, initial: true) { _, size in onSize(size) }
@@ -237,11 +265,5 @@ struct InboxList<Content: View>: View {
         if model.items.isEmpty { return [.init("⌥⌘S", "opens this inbox from anywhere")] }
         return [.init("↑↓", "select"), .init("⏎", "open"), .init("⌫", "clear all"),
                 .init("esc", "snooze 15 min")]
-    }
-    private var groups: some View {
-        VStack(spacing: 22) {
-            if !model.attention.isEmpty { group("NEEDS ATTENTION", items: model.attention, color: Color.panelAccent) }
-            if !model.completed.isEmpty { group("COMPLETED", items: model.completed, color: muted) }
-        }
     }
 }
