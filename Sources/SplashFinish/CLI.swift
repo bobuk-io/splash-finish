@@ -186,7 +186,7 @@ import SplashFinishCore
                     throw EventError.invalid("notify requires --agent, --task and a valid --status")
                 }
                 var source = SourceNavigator.capture() ?? EventSource()
-                source.url = options["source-url"]
+                source.url = options["source-url"] ?? source.url
                 let run = options["run"].flatMap(Int64.init), sequence = options["sequence"].flatMap(Int64.init)
                 guard (options["run"] == nil && options["sequence"] == nil) || (run != nil && sequence != nil) else {
                     throw EventError.invalid("--run and --sequence must both be integers")

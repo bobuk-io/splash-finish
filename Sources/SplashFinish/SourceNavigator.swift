@@ -13,6 +13,10 @@ import SplashFinishCore
         if let orca = OrcaSource.capture(environment: env) {
             return EventSource(bundleID: OrcaSource.bundleID, orca: orca)
         }
+        if env["AGTERM_ENABLED"] == "1", env["SSH_CONNECTION"] == nil, env["SSH_TTY"] == nil,
+           let sessionID = env["AGTERM_SESSION_ID"], UUID(uuidString: sessionID) != nil {
+            return EventSource(bundleID: "com.umputun.agterm", url: "agterm://session/\(sessionID)")
+        }
         var pid = getppid()
         for _ in 0..<48 {
             guard pid > 1 else { break }
