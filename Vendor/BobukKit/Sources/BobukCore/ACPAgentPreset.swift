@@ -777,13 +777,23 @@ public struct ACPAgentPreset: Codable, Equatable, Hashable, Identifiable, Sendab
             }
         }
 
+        let user = environment["USER"].flatMap { $0.isEmpty ? nil : $0 } ?? NSUserName()
         var env: [String: String] = [
             "HOME": canonicalHome.path,
             "TMPDIR": FileManager.default.temporaryDirectory.path,
             "PATH": mergedPath,
             "LANG": environment["LANG"] ?? "en_US.UTF-8",
         ]
-        for key in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "KIMI_API_KEY"] {
+        if !user.isEmpty {
+            env["USER"] = user
+            env["LOGNAME"] = environment["LOGNAME"].flatMap { $0.isEmpty ? nil : $0 } ?? user
+        }
+        for key in [
+            "SHELL",
+            "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "KIMI_API_KEY",
+            "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+            "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS",
+        ] {
             if let value = environment[key], !value.isEmpty { env[key] = value }
         }
 

@@ -197,6 +197,55 @@ import Testing
         #expect(direct.executable.lastPathComponent == "custom-codex")
     }
 
+    @Test func launchPassesUserIdentityAndShellEnvironment() throws {
+        let dir = try TemporaryDirectory(prefix: "acp-presets-env")
+        defer { dir.remove() }
+        let workspace = dir.url.appendingPathComponent("work")
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let custom = dir.url.appendingPathComponent("claude-agent-acp")
+        try makeExecutable(at: custom)
+
+        let explicit = try ACPAgentPreset.claude.launch(
+            in: workspace,
+            sandboxed: false,
+            clientName: "test",
+            home: dir.url,
+            environment: [
+                "BOBUK_ACP_CLAUDE_PATH": custom.path,
+                "USER": "alice",
+                "LOGNAME": "alice-login",
+                "SHELL": "/bin/zsh",
+                "ANTHROPIC_API_KEY": "sk-test",
+                "HTTPS_PROXY": "http://proxy.local:8080",
+                "SSH_AUTH_SOCK": "/tmp/agent.sock",
+                "UNRELATED_SECRET": "do-not-leak",
+            ]
+        )
+        #expect(explicit.environment?["USER"] == "alice")
+        #expect(explicit.environment?["LOGNAME"] == "alice-login")
+        #expect(explicit.environment?["SHELL"] == "/bin/zsh")
+        #expect(explicit.environment?["ANTHROPIC_API_KEY"] == "sk-test")
+        #expect(explicit.environment?["HTTPS_PROXY"] == "http://proxy.local:8080")
+        #expect(explicit.environment?["SSH_AUTH_SOCK"] == nil)
+        #expect(explicit.environment?["UNRELATED_SECRET"] == nil)
+
+        // When USER/LOGNAME are omitted from the environment, fall back to NSUserName()
+        // so macOS Keychain lookups keyed by $USER still find the user's credentials.
+        let fallback = try ACPAgentPreset.claude.launch(
+            in: workspace,
+            sandboxed: false,
+            clientName: "test",
+            home: dir.url,
+            environment: ["BOBUK_ACP_CLAUDE_PATH": custom.path]
+        )
+        let expectedUser = NSUserName()
+        if !expectedUser.isEmpty {
+            #expect(fallback.environment?["USER"] == expectedUser)
+            #expect(fallback.environment?["LOGNAME"] == expectedUser)
+        }
+        #expect(fallback.environment?["SHELL"] == nil)
+    }
+
     @Test func sandboxAllowsOpenedDirectoryAndBlocksUnrelatedUserFolders() throws {
         let dir = try TemporaryDirectory(prefix: "acp-presets-sandbox")
         defer { dir.remove() }
