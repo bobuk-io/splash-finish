@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftUI
 import Testing
 import BobukCore
 @testable import BobukUpdates
@@ -350,6 +352,99 @@ import BobukCore
             #expect(!model.succeeded)
         }
         #expect(read("brew-calls").isEmpty)
+    }
+
+    private static let refusal = """
+        Error: Refusing to load cask bobuk-io/tap/demo-app from untrusted tap bobuk-io/tap.
+        Run `brew trust --cask bobuk-io/tap/demo-app` or `brew trust bobuk-io/tap` to trust it.
+        """
+
+    @Test func homebrewTrustRunsOnlyThisCask() async throws {
+        let trusting = try install(brew: "echo \"==> Trusted cask $3\"")
+        let result = await HomebrewTrust.run(trusting, environment: ["PATH": "/usr/bin"])
+        #expect(result == HomebrewTrust.Result(exitCode: 0, output: "==> Trusted cask bobuk-io/tap/demo-app\n"))
+        #expect(read("brew-calls") == "trust --cask bobuk-io/tap/demo-app\n")
+        #expect(HomebrewUpdate.trustCommandLine(for: trusting) == "\(trusting.brew.path) trust --cask bobuk-io/tap/demo-app")
+        try FileManager.default.removeItem(at: root.appendingPathComponent("prefix"))
+        try FileManager.default.removeItem(at: root.appendingPathComponent("Applications"))
+        let failing = try install(brew: "echo nope >&2; exit 3")
+        let failed = await HomebrewTrust.run(failing)
+        #expect(failed.exitCode == 3)
+        #expect(failed.output == "nope\n")
+        #expect(!failed.succeeded)
+    }
+
+    /// A refusal of this cask as untrusted asks to trust it; nothing else does.
+    @Test func homebrewRefusalAsksForTrust() {
+        let model = HomebrewUpdateModel(appName: "Demo App")
+        model.finish(.failed(exitCode: 1, output: Self.refusal), log: nil, cask: demo.cask)
+        #expect(model.trust == .needed(cask: "bobuk-io/tap/demo-app"))
+        #expect(model.title == "Homebrew does not trust bobuk-io/tap/demo-app yet.")
+        #expect(!model.isBusy)
+        let other = Self.refusal.replacingOccurrences(of: "demo-app", with: "other")
+        for (outcome, cask) in [(HomebrewUpdateOutcome.failed(exitCode: 1, output: other), demo.cask),
+                                (.failed(exitCode: 1, output: "Error: Download failed"), demo.cask),
+                                (.cancelled(output: Self.refusal), demo.cask),
+                                (.failed(exitCode: 1, output: Self.refusal), nil)] as [(HomebrewUpdateOutcome, HomebrewCask?)] {
+            model.finish(outcome, log: nil, cask: cask)
+            #expect(model.trust == .none)
+        }
+        // The text may be only in the log.
+        model.finish(.failed(exitCode: 1, output: ""), log: Self.refusal, cask: demo.cask)
+        #expect(model.trust == .needed(cask: "bobuk-io/tap/demo-app"))
+    }
+
+    @Test func homebrewTrustThenUpdateAgain() async throws {
+        let install = try install(brew: "exit 0")
+        let controller = HomebrewUpdateWindowController(app: demo)
+        var trusted: [HomebrewInstall] = []
+        var restarted: [HomebrewInstall] = []
+        var result = HomebrewTrust.Result(exitCode: 0, output: "")
+        controller.runTrust = { trusted.append($0); return result }
+        controller.restart = { restarted.append($0) }
+        // Nothing to trust before the refusal.
+        controller.trustAndUpdate()
+        controller.install = install
+        controller.finish(.failed(exitCode: 1, output: Self.refusal))
+        #expect(controller.model.trust == .needed(cask: "bobuk-io/tap/demo-app"))
+        controller.trustAndUpdate()
+        #expect(controller.model.trust == .running(cask: "bobuk-io/tap/demo-app"))
+        #expect(controller.model.isBusy)
+        #expect(controller.model.command.hasSuffix("brew trust --cask bobuk-io/tap/demo-app"))
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(trusted == [install])
+        #expect(restarted == [install])
+        #expect(controller.model.trust == .none)
+
+        result = HomebrewTrust.Result(exitCode: 1, output: "Error: no such cask")
+        controller.finish(.failed(exitCode: 1, output: Self.refusal))
+        controller.trustAndUpdate()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(controller.model.trust == .failed(cask: "bobuk-io/tap/demo-app", exitCode: 1))
+        #expect(controller.model.output == "Error: no such cask")
+        #expect(controller.model.title == "Homebrew could not trust bobuk-io/tap/demo-app (brew exit code 1).")
+        #expect(restarted.count == 1)
+    }
+
+    /// With BOBUKKIT_PREVIEW_DIR set, renders the trust question offscreen for a look.
+    @Test func homebrewTrustPreview() async throws {
+        guard let dir = ProcessInfo.processInfo.environment["BOBUKKIT_PREVIEW_DIR"] else { return }
+        let model = HomebrewUpdateModel(appName: "Ting")
+        model.command = "/opt/homebrew/bin/brew upgrade --cask --greedy bobuk-io/tap/ting"
+        let cask = HomebrewCask(name: "ting", appBundleName: "Ting.app")
+        model.finish(.failed(exitCode: 1, output: Self.refusal.replacingOccurrences(of: "demo-app", with: "ting")), log: nil, cask: cask)
+        let view = HomebrewUpdateView(model: model, notice: "Settings and bindings are kept.", palette: .system, theme: nil,
+                                      cancel: {}, trust: {}, close: {})
+        let hosting = NSHostingView(rootView: view.frame(width: 620, height: 420))
+        hosting.frame = NSRect(x: 0, y: 0, width: 620, height: 420)
+        try await Task.sleep(for: .milliseconds(80))
+        hosting.layoutSubtreeIfNeeded()
+        hosting.displayIfNeeded()
+        let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        let url = URL(fileURLWithPath: dir, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        try #require(bitmap.representation(using: .png, properties: [:])).write(to: url.appendingPathComponent("homebrew-trust.png"))
     }
 
     @Test func homebrewChoiceStartsNoSparkle() throws {

@@ -110,7 +110,7 @@ public enum HomebrewUpdate {
     public static let viewerArgument = "--homebrew-update-viewer"
 
     /// Only this app: the cask is always named, so Homebrew never upgrades anything else.
-    /// `--greedy` because the casks say `auto_updates true`, which plain upgrades skip.
+    /// `--greedy` so that a cask with `auto_updates true` is never skipped.
     public static func arguments(for cask: HomebrewCask) -> [String] {
         ["upgrade", "--cask", "--greedy", cask.tap]
     }
@@ -131,6 +131,25 @@ public enum HomebrewUpdate {
     /// The command as the window shows it.
     public static func commandLine(for install: HomebrewInstall) -> String {
         ([install.brew.path] + arguments(for: install.cask)).joined(separator: " ")
+    }
+
+    /// `brew trust --cask <tap>`: trusts only this cask, never the whole tap or anything else.
+    public static func trustArguments(for cask: HomebrewCask) -> [String] {
+        ["trust", "--cask", cask.tap]
+    }
+
+    /// The trust command as the window shows it.
+    public static func trustCommandLine(for install: HomebrewInstall) -> String {
+        ([install.brew.path] + trustArguments(for: install.cask)).joined(separator: " ")
+    }
+
+    /// True when brew refused to load this cask because the person has not trusted it or its tap.
+    /// Homebrew loads casks of non-official taps only after `brew trust`, so an app installed from
+    /// its own tap before that rule cannot update until the person trusts it once. The message is
+    /// "Refusing to load cask bobuk-io/tap/ting from untrusted tap bobuk-io/tap."; a refusal of
+    /// another cask is not ours to fix.
+    public static func refusesUntrusted(_ output: String, cask: HomebrewCask) -> Bool {
+        output.contains("Refusing to load cask \(cask.tap) from untrusted tap")
     }
 
     /// Success only on exit code 0 without a cancel. Exit 0 without an upgrade report means that

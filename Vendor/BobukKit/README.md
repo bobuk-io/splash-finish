@@ -55,7 +55,7 @@ recipes, exact API signatures, and known macOS/Swift 6 pitfalls — also vendore
 | App ↔ command-line companion IPC | `MessagePortServer`, `MessagePortClient` (`sendTimeout`, `waitForServer(keepWaiting:)`) | BobukCore |
 | The real `.app`, version, resource bundles without `Bundle.module` (also under `swift test`) | `AppBundle` | BobukCore |
 | Logging | `BobukLog.logger("category")` | BobukCore |
-| Sparkle or Homebrew updates, the brew progress window | `UpdateService.detect(app:makeSparkle:)`, `HomebrewLaunch` | BobukUpdates |
+| Sparkle or Homebrew updates, the brew progress window (asks to `brew trust` the cask when Homebrew refuses it) | `UpdateService.detect(app:makeSparkle:)`, `HomebrewLaunch`, `HomebrewTrust` | BobukUpdates |
 | Test folders, fake executables and `.app` bundles, isolated defaults | `TemporaryDirectory`, `IsolatedDefaults`, `VersionFile` | BobukTestSupport |
 | Signing, notarization, GitHub release, appcast, cask, landing | `ReleaseKit/` (copied to `Scripts/release`) | scripts |
 

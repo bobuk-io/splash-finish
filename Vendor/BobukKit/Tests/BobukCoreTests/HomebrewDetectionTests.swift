@@ -147,6 +147,14 @@ import Testing
         #expect(environment["HOME"] == "/Users/x")
     }
 
+    @Test func untrustedRefusalIsRecognised() {
+        let refusal = "Error: Refusing to load cask bobuk-io/tap/ting from untrusted tap bobuk-io/tap.\n"
+        #expect(HomebrewUpdate.refusesUntrusted(refusal, cask: cask))
+        #expect(!HomebrewUpdate.refusesUntrusted(refusal, cask: HomebrewCask(name: "splash-finish", appBundleName: "Splash Finish.app")))
+        #expect(!HomebrewUpdate.refusesUntrusted("Error: Download failed", cask: cask))
+        #expect(HomebrewUpdate.trustArguments(for: cask) == ["trust", "--cask", "bobuk-io/tap/ting"])
+    }
+
     @Test func outcomeOfTheCommand() {
         let upgraded = "==> Upgrading 1 outdated package:\nbobuk-io/tap/ting 0.7.2 -> 0.7.3\n🍺  ting was successfully upgraded!\n"
         #expect(HomebrewUpdate.outcome(exitCode: 0, output: upgraded, cancelled: false) == .upgraded)

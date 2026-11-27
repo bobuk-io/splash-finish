@@ -385,6 +385,16 @@ HomebrewLaunch.showResultIfRequested(app: identity, theme: .shared)
 if let title = updates.menuTitle { /* menu item -> updates.checkForUpdates() */ }
 ```
 
+- The update runs `brew upgrade --cask --greedy <tap>/<cask>` and refreshes the taps first
+  (`HOMEBREW_AUTO_UPDATE_SECS=0`), so a release from minutes ago is found.
+- **Untrusted tap.** Homebrew loads casks of non-official taps only after `brew trust`. When brew
+  refuses the app's own cask ("Refusing to load cask … from untrusted tap"), the window says so and
+  offers **Trust and Update**: on that click only, it runs `brew trust --cask <tap>/<cask>` (this
+  cask, never the whole tap) and the same update again. Nothing to wire in the app. Never set
+  `HOMEBREW_NO_REQUIRE_TAP_TRUST`: trust is the person's decision.
+- `HomebrewUpdate.refusesUntrusted(_:cask:)`, `HomebrewUpdate.trustArguments(for:)` and
+  `HomebrewTrust.run(_:)` are the pieces; tests replace `runTrust` and `restart` on the controller.
+
 ---
 
 ## 8. Testing & Visual Verification (`BobukTestSupport`)
