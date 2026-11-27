@@ -34,6 +34,8 @@ recipes, exact API signatures, and known macOS/Swift 6 pitfalls — also vendore
 | A short message near the top of the screen | `ToastController` | BobukUI |
 | Global hotkey (no Accessibility permission) | `GlobalHotkeyCenter(signature:)` | BobukSystem |
 | Hotkey strings `option+shift+cmd+f`, key names, modifier taps | `Hotkey`, `KeyCodes`, `ModifierSet`, `ModifierTapDetector` | BobukCore |
+| Keys macOS never reports (Stop, Again, Undo, Cut, Copy, Paste, Find, F21–F24) as hotkeys, opt-in with Input Monitoring | `HIDKeyMonitor` → `GlobalHotkeyCenter.extendedKeys`, `onUnclaimedExtendedKey`, `KeyCodes.extended` | BobukSystem / BobukCore |
+| Key names of a leader-menu sequence (any key but Esc, ⌫, ⌦, arrows) | `SequenceKey.name(keyCode:latin:)`, `isValid`, `display`, `spoken` | BobukCore |
 | Named key codes instead of 53/36/126/43, layout-independent digits | `VirtualKey` | BobukCore |
 | The Latin key of an event on a Russian/Ukrainian layout | `KeyTranslator.latin`, `KeyEquivalent.latin(of:)` | BobukSystem / BobukUI |
 | Text typed on the wrong layout (ыфафкш → safari) | `KeyboardLayoutSwap.variants(of:)` | BobukCore |

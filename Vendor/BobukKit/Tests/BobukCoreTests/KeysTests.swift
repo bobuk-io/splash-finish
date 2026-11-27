@@ -14,7 +14,8 @@ import Testing
         #expect(SequenceKey.spoken(name) == (name == "space" ? "Space" : name == "return" ? "Return" : name.uppercased()))
     }
 
-    @Test(arguments: ["", "ab", "f0", "f21", "-", "ф", "tab", " a", "a "])
+    @Test(arguments: ["", "ab", "f0", "f25", "ф", " a", "a ", " ", "escape", "delete", "forwarddelete",
+                      "left", "up", "keypad1", "keypadenter", "key0", "key53", "key57", "key123", "pause"])
     func invalidNames(_ name: String) {
         #expect(!SequenceKey.isValid(name))
         #expect(SequenceKey.normalize(name) == nil)
@@ -34,8 +35,104 @@ import Testing
         #expect(SequenceKey.name(keyCode: 0, latin: latin) == latin.lowercased())
     }
 
-    @Test(arguments: [nil, "", "ab", "é", "ф", "İ", "-", " ", "\n"] as [String?])
-    func rejectedLatin(_ latin: String?) { #expect(SequenceKey.name(keyCode: 0, latin: latin) == nil) }
+    /// A key whose character is not one printable ASCII character takes its physical name.
+    @Test(arguments: [nil, "", "ab", "é", "ф", "İ", " ", "\n"] as [String?])
+    func physicalNameWithoutLatin(_ latin: String?) {
+        #expect(SequenceKey.name(keyCode: 0, latin: latin) == "a")
+        #expect(SequenceKey.name(keyCode: 33, latin: latin) == "[")
+        #expect(SequenceKey.name(keyCode: 10, latin: latin) == "key10")
+    }
+
+    @Test(arguments: ["-", "=", "[", "]", ";", "'", ",", ".", "/", "\\", "`", "§", "~", "+"])
+    func punctuationNames(_ name: String) {
+        let printable = name.unicodeScalars.first!.isASCII
+        #expect(SequenceKey.isValid(name) == printable)
+        #expect(SequenceKey.normalize(name) == (printable ? name : nil))
+        if printable {
+            #expect(SequenceKey.name(keyCode: 27, latin: name) == name)
+            #expect(SequenceKey.display(name) == name)
+        }
+    }
+
+    @Test(arguments: [("tab", 48, "\t", "⇥", "Tab"), ("home", 115, "\u{1}", "Home", "Home"), ("end", 119, "\u{4}", "End", "End"),
+                      ("pageup", 116, "\u{b}", "PgUp", "Page Up"), ("pagedown", 121, "\u{c}", "PgDn", "Page Down"),
+                      ("help", 114, "\u{5}", "Help", "Help"), ("keypadclear", 71, "\u{1b}", "Clear", "Clear"),
+                      ("key10", 10, "§", "#10", "Key 10"), ("key110", 110, "\u{10}", "#110", "Key 110")] as [(String, UInt16, String, String, String)])
+    func namedKeys(_ name: String, _ code: UInt16, _ latin: String, _ label: String, _ spoken: String) {
+        #expect(SequenceKey.isValid(name))
+        #expect(SequenceKey.normalize(name.uppercased()) == name)
+        #expect(SequenceKey.name(keyCode: code, latin: latin) == name)
+        #expect(SequenceKey.display(name) == label)
+        #expect(SequenceKey.spoken(name) == spoken)
+    }
+
+    @Test func reservedKeysAreNeverSequenceKeys() {
+        for code in SequenceKey.reservedKeyCodes {
+            #expect(SequenceKey.name(keyCode: code, latin: nil) == nil)
+            #expect(SequenceKey.name(keyCode: code, latin: "a") == nil)
+        }
+        for key in ModifierKey.allCases { #expect(SequenceKey.name(keyCode: key.keyCode, latin: nil) == nil) }
+        #expect(SequenceKey.name(keyCode: 57, latin: nil) == nil)
+    }
+
+    @Test func keypadKeysKeepTheirCharacter() {
+        #expect(SequenceKey.name(keyCode: 83, latin: "1") == "1")
+        #expect(SequenceKey.name(keyCode: 67, latin: "*") == "*")
+        #expect(SequenceKey.name(keyCode: 83, latin: nil) == nil)
+    }
+
+    @Test func extendedKeys() throws {
+        for (name, code) in KeyCodes.extended {
+            #expect(SequenceKey.isValid(name))
+            #expect(SequenceKey.normalize(name.uppercased()) == name)
+            #expect(SequenceKey.name(keyCode: code, latin: nil) == name)
+            #expect(SequenceKey.name(keyCode: code, latin: "a") == name)
+        }
+        #expect(SequenceKey.display("stop") == "Stop")
+        #expect(SequenceKey.spoken("again") == "Again")
+        #expect(SequenceKey.display("f21") == "F21")
+    }
+}
+
+@Suite struct ExtendedKeyCodeTests {
+    @Test func table() {
+        #expect(KeyCodes.extended.count == 14)
+        #expect(KeyCodes.extended["stop"] == 0x1078)
+        #expect(KeyCodes.extended["again"] == 0x1079)
+        #expect(KeyCodes.extended["f24"] == 0x1073)
+        for (name, code) in KeyCodes.extended {
+            #expect(code > 0x1000)
+            #expect(KeyCodes.isExtended(code))
+            #expect(KeyCodes.code(for: name) == code)
+            #expect(KeyCodes.name(for: code) == name)
+            let usage = KeyCodes.hidUsage(of: code)!
+            #expect(KeyCodes.extendedCode(hidUsage: usage) == code)
+        }
+    }
+
+    @Test(arguments: [0x04, 0x28, 0x68, 0x75, 0x7F, 0xE0, 0x1078] as [UInt32])
+    func usagesMacOSReads(_ usage: UInt32) { #expect(KeyCodes.extendedCode(hidUsage: usage) == nil) }
+
+    @Test func notExtended() {
+        #expect(!KeyCodes.isExtended(0))
+        #expect(!KeyCodes.isExtended(0x1000))
+        #expect(KeyCodes.hidUsage(of: 0x78) == nil)
+        #expect(KeyCodes.extendedDisplay("a") == nil)
+    }
+
+    @Test func extendedHotkeys() throws {
+        let stop = try #require(Hotkey(string: "stop"))
+        #expect(stop == .combo(keyCode: 0x1078, modifiers: []))
+        #expect(stop.isValid)
+        #expect(stop.display == "Stop")
+        #expect(stop.string == "stop")
+        let again = try #require(Hotkey(string: "Shift+Cmd+Again"))
+        #expect(again.string == "shift+cmd+again")
+        #expect(again.display == "⇧⌘Again")
+        #expect(Hotkey(string: "f21")?.display == "F21")
+        #expect(try JSONDecoder().decode(Hotkey.self, from: JSONEncoder().encode(again)) == again)
+        #expect(Hotkey(string: "stop+again") == nil)
+    }
 }
 
 @Suite struct ModifierKeyTests {

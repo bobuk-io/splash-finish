@@ -281,6 +281,41 @@ if let hotkey = Hotkey(string: "option+cmd+s") {
 - Use `HotkeyRecordingGate` when Settings has shortcut recorders so global hotkeys pause while recording and only one recorder runs at a time.
 - In unit tests, pass a mock `register:` closure to `GlobalHotkeyCenter(signature:register:)` — **never** register real Carbon global hotkeys in tests.
 
+### Extended keys through HID (opt-in)
+
+macOS drops some HID keys before any app sees them: Stop, Again, Undo, Cut, Copy, Paste, Find,
+Execute, Menu, Select and F21–F24 (`KeyCodes.extended`). Carbon cannot register them and `NSEvent`
+never reports them. `HIDKeyMonitor` reads them straight from the keyboards with `IOHIDManager`
+(listen-only, never seized), and the center then registers hotkeys on them like any other key:
+
+```swift
+// Only when the person turns the option on: it asks for Input Monitoring once.
+let monitor = HIDKeyMonitor()
+hotkeys.extendedKeys = monitor           // nil again turns it off
+hotkeys.onUnclaimedExtendedKey = { event in
+    // A key no active hotkey took: feed an open menu or a recorder (`event.hotkey`, `event.pressed`).
+}
+hotkeys.register(Hotkey(string: "cmd+stop")!, id: 9) { _ in run() }
+// monitor.problem: nil, or why it cannot read keys (Input Monitoring denied); show it in Settings.
+// HIDKeyMonitor.access / .settingsURL for a status row and an "Open System Settings" button.
+```
+
+- Without a source, or while `problem` is set, extended-key registrations are `.failed`; they turn
+  `.active` by themselves once Input Monitoring is allowed (the monitor checks every two seconds).
+- Codes are `KeyCodes.extendedBase + HID usage` (Stop is `0x1078`); config strings use the names
+  (`"stop"`, `"shift+again"`), and `Hotkey.display` shows `Stop`, `⇧Again`.
+- Keys that macOS reads itself never come through the monitor, so nothing fires twice. A key reported
+  by two keyboards at once (a device and Karabiner's virtual one) is one press.
+- Tests: `HIDKeyMonitor(connect: false)` and its `receive(hidUsage:…)`, or a fake `ExtendedKeySource`;
+  `GlobalHotkeyCenter.receiveExtended(_:)` delivers an event without a source.
+
+### Sequence keys (leader menus)
+
+`SequenceKey.name(keyCode:latin:)` names any key except Esc, ⌫, ⌦ and the arrows, which a menu
+uses to close, go back and move: `"space"`, `"return"`, `"f1"`…, one printable ASCII character of the
+ASCII-capable layout (`"a"`, `"["`, `"/"`), `"tab"`, `"home"`, `"pageup"`…, the extended names and
+`"key<N>"` for a physical key with neither (ISO § is `"key10"`). `display` and `spoken` label them.
+
 ---
 
 ## 6. Paths, Persistence, Secrets, Processes & IPC

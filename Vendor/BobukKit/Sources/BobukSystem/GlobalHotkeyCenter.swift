@@ -1,6 +1,7 @@
 // System-wide shortcuts through Carbon `RegisterEventHotKey`: no Accessibility or Input Monitoring
 // permission, no helper. Carbon reports both press and release. From Ting's HotkeyService; Splash
-// Finish's single ⌥⌘S and every future app use the same center.
+// Finish's single ⌥⌘S and every future app use the same center. Keys that macOS never reports
+// (`KeyCodes.extended`, such as Stop) work only with an `extendedKeys` source such as `HIDKeyMonitor`.
 import AppKit
 import BobukCore
 import Carbon
@@ -24,6 +25,8 @@ public final class GlobalHotkeyCenter {
         var onRelease: (() -> Void)?
         var repeats: Bool
         var held = false
+        /// Refused here (not a valid key, or another registration has it); never activated later.
+        var refused = false
     }
 
     private var registrations: [UInt32: Registration] = [:]
@@ -36,6 +39,31 @@ public final class GlobalHotkeyCenter {
 
     /// Called whenever a registration changes its status.
     public var onStatusChange: ((UInt32, Status) -> Void)?
+
+    /// Reads the hotkeys on `KeyCodes.extended` keys. nil: they fail with `extendedKeysOff`.
+    /// Setting it updates the status of every such registration.
+    public var extendedKeys: ExtendedKeySource? {
+        didSet {
+            guard oldValue !== extendedKeys else { return }
+            oldValue?.onKey = nil
+            oldValue?.onProblemChange = nil
+            extendedKeys?.onKey = { [weak self] event in self?.receiveExtended(event) }
+            extendedKeys?.onProblemChange = { [weak self] in self?.refreshExtended() }
+            refreshExtended()
+        }
+    }
+
+    /// An extended key press or release that no active registration took, such as a key typed
+    /// into an open menu or a recorder while the hotkeys are off.
+    public var onUnclaimedExtendedKey: ((ExtendedKeyEvent) -> Void)?
+
+    /// Extended keys that are down → the registration their press went to.
+    private var extendedHeld: [UInt16: UInt32] = [:]
+
+    /// Why an extended-key hotkey fails while `extendedKeys` is nil.
+    public static func extendedKeysOff(_ display: String) -> String {
+        "\(display) can be read only with extended key capture (HID), which is off."
+    }
 
     /// `signature` is a four-letter code unique to the app, such as `'TING'` (0x5449_4E47).
     public init(signature: OSType, register override: ((Hotkey, UInt32) -> Status)? = nil) {
@@ -72,11 +100,14 @@ public final class GlobalHotkeyCenter {
         unregister(id)
         registrations[id] = Registration(hotkey: hotkey, ref: nil, onPress: onPress, onRelease: onRelease, repeats: repeats)
         guard hotkey.isValid, case .combo(let keyCode, let modifiers) = hotkey else {
+            registrations[id]?.refused = true
             return setStatus(.failed("\(hotkey.display) cannot be a shortcut. Choose a key that is not a modifier."), for: id)
         }
         if registrations.contains(where: { $0.key != id && $0.value.hotkey == hotkey }) {
+            registrations[id]?.refused = true
             return setStatus(.failed("\(hotkey.display) is already used here."), for: id)
         }
+        if KeyCodes.isExtended(keyCode) { return setStatus(extendedStatus(hotkey), for: id) }
         if let registerOverride { return setStatus(registerOverride(hotkey, id), for: id) }
         return carbonRegister(keyCode: keyCode, modifiers: modifiers, display: hotkey.display, id: id)
     }
@@ -87,6 +118,7 @@ public final class GlobalHotkeyCenter {
         let release = registrations[id]?.onRelease
         if let ref = registrations[id]?.ref { UnregisterEventHotKey(ref) }
         registrations[id] = nil
+        extendedHeld = extendedHeld.filter { $0.value != id }
         setStatus(.inactive, for: id)
         // Carbon sends no release for a hotkey that is gone.
         if wasActive { release?() }
@@ -116,6 +148,46 @@ public final class GlobalHotkeyCenter {
         } else {
             registrations[id]?.held = false
             registration.onRelease?()
+        }
+    }
+
+    /// Delivers an extended key as the source does. Public for tests of app wiring.
+    public func receiveExtended(_ event: ExtendedKeyEvent) {
+        if event.pressed {
+            let hotkey = event.hotkey
+            if let id = registrations.first(where: { $0.value.hotkey == hotkey && status($0.key) == .active })?.key {
+                extendedHeld[event.keyCode] = id
+                receive(id, pressed: true, at: event.time)
+                return
+            }
+        } else if let id = extendedHeld.removeValue(forKey: event.keyCode) {
+            receive(id, pressed: false, at: event.time)
+            return
+        }
+        onUnclaimedExtendedKey?(event)
+    }
+
+    private func extendedStatus(_ hotkey: Hotkey) -> Status {
+        guard let extendedKeys else { return .failed(Self.extendedKeysOff(hotkey.display)) }
+        if let problem = extendedKeys.problem { return .failed(problem) }
+        return .active
+    }
+
+    /// The source changed or its problem did: every extended-key registration takes the new status.
+    private func refreshExtended() {
+        for id in registeredIDs {
+            guard let registration = registrations[id], !registration.refused,
+                  case .combo(let keyCode, _) = registration.hotkey, KeyCodes.isExtended(keyCode) else { continue }
+            let next = extendedStatus(registration.hotkey)
+            if status(id) == .active, next != .active {
+                // A key held through the change reports its release.
+                if extendedHeld.values.contains(id) {
+                    extendedHeld = extendedHeld.filter { $0.value != id }
+                    registrations[id]?.held = false
+                    registration.onRelease?()
+                }
+            }
+            setStatus(next, for: id)
         }
     }
 
