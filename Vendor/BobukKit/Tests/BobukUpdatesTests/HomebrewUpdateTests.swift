@@ -165,7 +165,15 @@ import BobukCore
     /// installed app; the viewer gets the output that brew writes after Ting's exit and the result,
     /// and after the success hands over to the installed copy.
     @Test func homebrewProgressStaysVisibleAfterTingQuits() async throws {
-        let install = try install(brew: "echo first\nsleep 1\necho second\necho '🍺  ting was successfully upgraded!'")
+        // brew goes on only after the test has looked, not after a fixed sleep: under load the
+        // viewer may start later than any sleep, and the test would then see the finished run.
+        let go = root.appendingPathComponent("go")
+        let install = try install(brew: """
+            echo first
+            i=0; while [ ! -f '\(go.path)' ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done
+            echo second
+            echo '🍺  ting was successfully upgraded!'
+            """)
         let runner = try runner(install, pid: try deadPID())
         _ = runner.start(onOutput: { _ in }, onFinish: { _ in })
         let directory = try #require(runner.directory)
@@ -175,6 +183,7 @@ import BobukCore
         #expect(HomebrewUpdateRunner.outcome(in: directory) == nil)
         #expect(!HomebrewUpdateRunner.output(in: directory).contains("second"))
         #expect(read("open-calls").isEmpty)
+        try Data().write(to: go)
 
         let viewer = try viewerProcess()
         let (watcher, outcome, seen) = try await attach(directory, pid: viewer.processIdentifier)
