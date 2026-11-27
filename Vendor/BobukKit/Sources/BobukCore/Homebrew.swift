@@ -115,6 +115,19 @@ public enum HomebrewUpdate {
         ["upgrade", "--cask", "--greedy", cask.tap]
     }
 
+    /// The environment of the brew run, from the app's own.
+    /// - `PATH` starts with the prefix: an app started by Finder or at login has a minimal PATH.
+    /// - `brew upgrade` refreshes the taps first, every time. By default brew refreshes them at most
+    ///   once a day, so a release published since then is invisible: brew reports "the latest
+    ///   version is already installed" while the app has just announced the new one.
+    public static func environment(_ base: [String: String], prefix: URL) -> [String: String] {
+        var environment = base
+        environment["PATH"] = "\(prefix.path)/bin:\(prefix.path)/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
+        environment["HOMEBREW_AUTO_UPDATE_SECS"] = "0"
+        environment["HOMEBREW_NO_AUTO_UPDATE"] = nil
+        return environment
+    }
+
     /// The command as the window shows it.
     public static func commandLine(for install: HomebrewInstall) -> String {
         ([install.brew.path] + arguments(for: install.cask)).joined(separator: " ")

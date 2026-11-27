@@ -135,6 +135,18 @@ import Testing
             == "\(brew.appendingPathComponent("bin/brew").path) upgrade --cask --greedy bobuk-io/tap/ting")
     }
 
+    /// brew refreshes the taps before every upgrade, or a release from today stays invisible.
+    @Test func environmentRefreshesTheTaps() {
+        let prefix = URL(fileURLWithPath: "/opt/homebrew")
+        let environment = HomebrewUpdate.environment(
+            ["PATH": "/usr/bin", "HOME": "/Users/x", "HOMEBREW_NO_AUTO_UPDATE": "1", "HOMEBREW_AUTO_UPDATE_SECS": "86400"],
+            prefix: prefix)
+        #expect(environment["PATH"] == "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin")
+        #expect(environment["HOMEBREW_AUTO_UPDATE_SECS"] == "0")
+        #expect(environment["HOMEBREW_NO_AUTO_UPDATE"] == nil)
+        #expect(environment["HOME"] == "/Users/x")
+    }
+
     @Test func outcomeOfTheCommand() {
         let upgraded = "==> Upgrading 1 outdated package:\nbobuk-io/tap/ting 0.7.2 -> 0.7.3\n🍺  ting was successfully upgraded!\n"
         #expect(HomebrewUpdate.outcome(exitCode: 0, output: upgraded, cancelled: false) == .upgraded)

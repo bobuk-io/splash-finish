@@ -124,11 +124,7 @@ public final class HomebrewUpdateRunner {
         process.arguments = [script.path, folder.path, install.app.path, install.caskroom.path,
                              opener.path, app.cask.appBundleName, app.executableName,
                              install.brew.path] + HomebrewUpdate.arguments(for: install.cask)
-        var environment = ProcessInfo.processInfo.environment
-        // An app started by Finder or at login has a minimal PATH; brew needs its own prefix.
-        let prefix = install.prefix.path
-        environment["PATH"] = "\(prefix)/bin:\(prefix)/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
-        process.environment = environment
+        process.environment = HomebrewUpdate.environment(ProcessInfo.processInfo.environment, prefix: install.prefix)
         // No terminal: a password prompt (sudo) fails instead of waiting forever, and brew reports it.
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
