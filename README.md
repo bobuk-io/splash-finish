@@ -93,6 +93,8 @@ splash-finish notify --agent 'Claude Code' --task migration \
 
 Keep `--agent` and `--task` stable for the same session: an update replaces its earlier notification instead of adding a duplicate. A new notification can reveal the panel unless a timed menu bar snooze is active; an identical repeated event does not. `--status running` removes an outdated notification without waking the panel. `--project` sets a label; otherwise the current directory name is used. A verified originating session URL can be supplied with `--source-url`.
 
+For notifications from local Agterm sessions, `notify` and installed hooks pick up the session link automatically from `AGTERM_ENABLED=1` and a full `AGTERM_SESSION_ID`. An explicit `--source-url` takes precedence. The link selects the Agterm session, not a specific split pane.
+
 ### Returning to Orca
 
 Agents started in a **local Orca terminal** automatically pass their terminal handle, workspace and pane identity to Splash Finish. This works with pi, Claude Code, Codex and manual `splash-finish notify` calls; no per-project setup is needed. Changing the agent's working directory does not change the captured workspace. For rich pi questions, **Answer in pi** also returns to that terminal (reload the updated question adapter first).

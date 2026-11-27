@@ -119,6 +119,26 @@ class AppSmokeTests(unittest.TestCase):
                 "terminal": "term_original", "worktree": env["ORCA_WORKTREE_ID"], "pane": "tab-1:leaf-1"})
             self.assertEqual(event["source"]["bundleID"], "com.stablyai.orca")
 
+    def test_agterm_link_survives_notify_and_claude_hook(self):
+        session_id = "123e4567-e89b-12d3-a456-426614174000"
+        env = {key: value for key, value in self.env.items()
+               if not key.startswith(("REX_", "ORCA_", "SSH_"))}
+        env.update(AGTERM_ENABLED="1", AGTERM_SESSION_ID=session_id)
+        inherited = f"agterm://session/{session_id}"
+        explicit = "agterm://session/123e4567-e89b-12d3-a456-426614174001"
+        subprocess.run([str(APP), "notify", "--agent", "OMP", "--task", "agterm-omp"],
+                       env=env, check=True, timeout=10)
+        subprocess.run([str(APP), "notify", "--agent", "pi", "--task", "agterm-explicit",
+                        "--source-url", explicit],
+                       env=env, check=True, timeout=10)
+        hook = {"session_id": "agterm-claude", "hook_event_name": "Stop", "cwd": "/tmp/unrelated"}
+        subprocess.run([str(APP), "hook", "claude", "--managed-splash-finish"],
+                       input=json.dumps(hook), env=env, text=True, check=True, timeout=10)
+        state = self.wait_for(lambda s: len(s["items"]) == 3)
+        self.assertEqual({item["task"]: item["source"].get("url") for item in state["items"]}, {
+            "agterm-omp": inherited, "agterm-explicit": explicit, "agterm-claude": inherited,
+        })
+
     def test_markdown_payload_survives_cli_without_early_truncation(self):
         target = 'https://example.com/report/' + 'a' * 250
         title = f'Готово: [**релиз**]({target}) опубликован.'
