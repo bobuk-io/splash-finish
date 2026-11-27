@@ -130,7 +130,8 @@ import BobukUpdates
 }
 
 /// A minimalist ACP chat window built with `ChromeWindow(theme:)` and `AgentChatView`.
-@MainActor func renderChat(preset: ThemePreset, dark: Bool, output: URL) throws {
+@MainActor func renderChat(preset: ThemePreset, dark: Bool, scale: Double = 1, sendKey: ChatSendKey = .commandReturn,
+                            output: URL) throws {
     let suite = UserDefaults(suiteName: "bobukkit-gallery-chat-\(UUID().uuidString)")!
     let store = ThemeStore(defaults: suite, defaultAppearance: dark ? .dark : .light,
                            defaultPreset: preset, appliesToApplication: false)
@@ -149,6 +150,8 @@ import BobukUpdates
             sandboxed: .constant(true),
             tokens: store.tokens
         )
+        .chatTextScale(scale)
+        .chatSendKey(sendKey)
         .themedSurface(store)
     )
     guard let view = window.contentView else { return }
@@ -213,6 +216,8 @@ try MainActor.assumeIsolated {
     if let sage = ThemePreset.named("sage") {
         try renderChat(preset: sage, dark: false, output: output.appendingPathComponent("chat-light.png"))
         try renderChat(preset: sage, dark: true, output: output.appendingPathComponent("chat-dark.png"))
+        try renderChat(preset: sage, dark: false, scale: 1.5, sendKey: .return,
+                       output: output.appendingPathComponent("chat-light-150.png"))
         try renderAgentSettings(preset: sage, dark: false, output: output.appendingPathComponent("agent-settings-light.png"))
     }
 }

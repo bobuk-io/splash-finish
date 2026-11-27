@@ -357,7 +357,11 @@ public struct ACPAgentPreset: Codable, Equatable, Hashable, Identifiable, Sendab
         ".volta/bin",
         ".bun/bin",
         ".npm-global/bin",
+        // pnpm 11+ keeps global binaries in `$PNPM_HOME/bin`; upgrading does not move old ones,
+        // so the new folder goes first and the old one stays for pnpm 10 and older.
+        "Library/pnpm/bin",
         "Library/pnpm",
+        ".local/share/pnpm/bin",
         ".local/share/pnpm",
         ".fnm/current/bin",
         ".nodenv/shims",
@@ -420,19 +424,33 @@ public struct ACPAgentPreset: Codable, Equatable, Hashable, Identifiable, Sendab
         for rel in commonHomeBins {
             add(home.appendingPathComponent(rel).path)
         }
+        if let pnpmHome = environment["PNPM_HOME"].flatMap({ expandTilde($0, home: home) }) {
+            add(pnpmHome.appendingPathComponent("bin").path)
+            add(pnpmHome.path)
+        }
         if let prefix = npmPrefix(home: home, environment: environment) {
             add(prefix.appendingPathComponent("bin").path)
         }
-        for dynamic in dynamicHomeBinDirectories(home: home) {
+        for dynamic in dynamicHomeBinDirectories(home: home, environment: environment) {
             add(dynamic)
         }
-        for sys in commonSystemBins {
+        for sys in systemBins(environment: environment) {
             add(sys)
         }
         for entry in pathEntries {
             add(entry)
         }
         return dirs
+    }
+
+    /// Name of an environment variable that replaces the fixed system folders (Homebrew,
+    /// `/usr/local`, `/usr/bin`, `/bin`) with its colon-separated list; empty means none.
+    /// Tests set it so that agents installed on the machine never leak into their results.
+    public static let systemBinsOverrideVariable = "BOBUK_ACP_SYSTEM_BINS"
+
+    private static func systemBins(environment: [String: String]) -> [String] {
+        guard let override = environment[systemBinsOverrideVariable] else { return commonSystemBins }
+        return override.split(separator: ":").map(String.init).filter { $0.hasPrefix("/") }
     }
 
     private static func npmPrefix(home: URL, environment: [String: String]) -> URL? {
@@ -471,7 +489,22 @@ public struct ACPAgentPreset: Codable, Equatable, Hashable, Identifiable, Sendab
         return URL(fileURLWithPath: path)
     }
 
-    private static func dynamicHomeBinDirectories(home: URL) -> [String] {
+    /// fnm folders, in fnm's own order: `$FNM_DIR`, the legacy `~/.fnm`, then
+    /// `$XDG_DATA_HOME/fnm` (default `~/.local/share/fnm`) and macOS Application Support.
+    private static func fnmRoots(home: URL, environment: [String: String]) -> [URL] {
+        var roots: [URL] = []
+        if let dir = environment["FNM_DIR"].flatMap({ expandTilde($0, home: home) }) { roots.append(dir) }
+        roots.append(home.appendingPathComponent(".fnm"))
+        if let xdg = environment["XDG_DATA_HOME"].flatMap({ expandTilde($0, home: home) }) {
+            roots.append(xdg.appendingPathComponent("fnm"))
+        }
+        roots.append(home.appendingPathComponent(".local/share/fnm"))
+        roots.append(home.appendingPathComponent("Library/Application Support/fnm"))
+        var seen = Set<String>()
+        return roots.filter { seen.insert($0.standardizedFileURL.path).inserted }
+    }
+
+    private static func dynamicHomeBinDirectories(home: URL, environment: [String: String]) -> [String] {
         let fm = FileManager.default
         var found: [String] = []
 
@@ -487,11 +520,17 @@ public struct ACPAgentPreset: Codable, Equatable, Hashable, Identifiable, Sendab
             }
         }
 
-        // Versioned fnm node bins (newest version first).
-        let fnmNodes = home.appendingPathComponent(".fnm/node-versions")
-        if let versions = try? fm.contentsOfDirectory(atPath: fnmNodes.path) {
-            for version in versions.sorted(by: { $0.localizedStandardCompare($1) == .orderedDescending }) {
-                let bin = fnmNodes.appendingPathComponent(version).appendingPathComponent("installation/bin").path
+        // fnm: in each folder the `default` alias first, then versioned node bins (newest first).
+        for root in fnmRoots(home: home, environment: environment) {
+            var candidates = [root.appendingPathComponent("aliases/default/bin").path]
+            let nodes = root.appendingPathComponent("node-versions")
+            if let versions = try? fm.contentsOfDirectory(atPath: nodes.path) {
+                for version in versions.sorted(by: { $0.localizedStandardCompare($1) == .orderedDescending })
+                where !version.hasPrefix(".") {
+                    candidates.append(nodes.appendingPathComponent(version).appendingPathComponent("installation/bin").path)
+                }
+            }
+            for bin in candidates {
                 var isDir: ObjCBool = false
                 if fm.fileExists(atPath: bin, isDirectory: &isDir), isDir.boolValue {
                     found.append(bin)

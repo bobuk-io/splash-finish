@@ -29,7 +29,7 @@ import Testing
         try makeExecutable(at: home.appendingPathComponent(".pi/agent/bin/pi-acp"))
         try makeExecutable(at: home.appendingPathComponent(".local/bin/claude-code-acp"))
 
-        let emptyEnv: [String: String] = ["PATH": ""]
+        let emptyEnv: [String: String] = ["PATH": "", "BOBUK_ACP_SYSTEM_BINS": ""]
         let detected = ACPAgentPreset.detectInstalled(in: ACPAgentPreset.all, home: home, environment: emptyEnv)
         #expect(detected.map(\.id) == ["claude", "pi", "kimi"])
         #expect(ACPAgentPreset.preferredAvailable(in: ACPAgentPreset.all, home: home, environment: emptyEnv) == .claude)
@@ -46,7 +46,7 @@ import Testing
         try makeExecutable(at: home.appendingPathComponent(".nvm/versions/node/v22.5.0/bin/pi"))
         try makeExecutable(at: home.appendingPathComponent(".local/share/mise/installs/gemini-cli/latest/bin/gemini"))
 
-        let env: [String: String] = ["PATH": extraBin.path]
+        let env: [String: String] = ["PATH": extraBin.path, "BOBUK_ACP_SYSTEM_BINS": ""]
         let statuses = ACPAgentPreset.detectAll(in: ACPAgentPreset.all, home: home, environment: env)
         let byID = Dictionary(uniqueKeysWithValues: statuses.map { ($0.id, $0) })
 
@@ -84,7 +84,7 @@ import Testing
         let geminiShim = shimsDir.appendingPathComponent("gemini")
         try FileManager.default.createSymbolicLink(at: geminiShim, withDestinationURL: miseBin)
 
-        let env: [String: String] = ["PATH": ""]
+        let env: [String: String] = ["PATH": "", "BOBUK_ACP_SYSTEM_BINS": ""]
         let codexURL = ACPAgentPreset.codex.resolveExecutable(home: home, environment: env)
         #expect(codexURL?.lastPathComponent == "codex-acp")
 
@@ -128,7 +128,7 @@ import Testing
         )
         #expect(installedURL.lastPathComponent == "codex-acp")
         #expect(await log.joined().contains("@agentclientprotocol/codex-acp"))
-        #expect(ACPAgentPreset.codex.detectAvailability(home: home, environment: ["PATH": ""]) == .ready(executableURL: installedURL))
+        #expect(ACPAgentPreset.codex.detectAvailability(home: home, environment: ["PATH": "", "BOBUK_ACP_SYSTEM_BINS": ""]) == .ready(executableURL: installedURL))
 
         // Agents with built-in ACP do not use npm adapter installation.
         do {
@@ -172,7 +172,7 @@ import Testing
             installHint: "Install Nonexistent."
         )
         #expect(throws: ACPAgentLaunchError.notInstalled(agent: "Nonexistent", installHint: "Install Nonexistent.")) {
-            _ = try nonexistentPreset.launch(in: workspace, clientName: "test", home: dir.url, environment: ["PATH": ""])
+            _ = try nonexistentPreset.launch(in: workspace, clientName: "test", home: dir.url, environment: ["PATH": "", "BOBUK_ACP_SYSTEM_BINS": ""])
         }
 
         #expect(throws: ACPAgentLaunchError.invalidOverride(variable: "BOBUK_ACP_CODEX_PATH")) {
@@ -403,5 +403,70 @@ import Testing
         #expect(probed.models?.choices.count == 2)
         #expect(probed.efforts?.current == "medium")
         #expect(probed.efforts?.choices.map(\.id) == ["low", "medium", "high"])
+    }
+
+    // A login item starts with the GUI PATH, so only the fallback folders can find these.
+    /// `resolveExecutable` resolves symlinks, and the temporary folder sits behind `/var`.
+    private func real(_ url: URL) -> String {
+        guard let path = realpath(url.path, nil) else { return url.path }
+        defer { free(path) }
+        return String(cString: path)
+    }
+    private func real(_ path: String) -> String { real(URL(fileURLWithPath: path)) }
+
+    private let guiEnvironment: [String: String] = ["PATH": "/usr/bin:/bin", "BOBUK_ACP_SYSTEM_BINS": ""]
+
+    @Test func findsPnpm11GlobalBinariesBeforeStaleOldOnes() throws {
+        let dir = try TemporaryDirectory(prefix: "acp-presets-pnpm")
+        defer { dir.remove() }
+        let home = dir.url
+        try makeExecutable(at: home.appendingPathComponent("Library/pnpm/claude-agent-acp"))
+        try makeExecutable(at: home.appendingPathComponent("Library/pnpm/bin/claude-agent-acp"))
+        #expect(ACPAgentPreset.claude.resolveExecutable(home: home, environment: guiEnvironment)?.path
+                == real(home.appendingPathComponent("Library/pnpm/bin/claude-agent-acp")))
+
+        let custom = dir.url.appendingPathComponent("pnpm-home")
+        try makeExecutable(at: custom.appendingPathComponent("bin/pi-acp"))
+        var env = guiEnvironment
+        env["PNPM_HOME"] = custom.path
+        #expect(ACPAgentPreset.pi.resolveExecutable(home: home, environment: env)?.path
+                == real(custom.appendingPathComponent("bin/pi-acp")))
+    }
+
+    @Test func findsFnmInstallsInEveryFnmFolder() throws {
+        let dir = try TemporaryDirectory(prefix: "acp-presets-fnm")
+        defer { dir.remove() }
+        let home = dir.url
+        // XDG layout without ~/.fnm: the default alias wins over a newer version.
+        let xdg = home.appendingPathComponent(".local/share/fnm")
+        try makeExecutable(at: xdg.appendingPathComponent("node-versions/v26.13.1/installation/bin/claude-agent-acp"))
+        try makeExecutable(at: xdg.appendingPathComponent("aliases/default/bin/claude-agent-acp"))
+        let dirs = ACPAgentPreset.claude.searchDirectories(home: home, environment: guiEnvironment)
+        let alias = xdg.appendingPathComponent("aliases/default/bin").path
+        let versioned = xdg.appendingPathComponent("node-versions/v26.13.1/installation/bin").path
+        #expect(dirs.contains(alias) && dirs.contains(versioned))
+        #expect(dirs.firstIndex(of: alias)! < dirs.firstIndex(of: versioned)!)
+        #expect(ACPAgentPreset.claude.resolveExecutable(home: home, environment: guiEnvironment)?.path
+                == real(alias + "/claude-agent-acp"))
+
+        // $FNM_DIR anywhere, newest version first.
+        let custom = dir.url.appendingPathComponent("elsewhere/fnm")
+        try makeExecutable(at: custom.appendingPathComponent("node-versions/v24.22.2/installation/bin/pi-acp"))
+        try makeExecutable(at: custom.appendingPathComponent("node-versions/v26.1.0/installation/bin/pi-acp"))
+        var env = guiEnvironment
+        env["FNM_DIR"] = custom.path
+        #expect(ACPAgentPreset.pi.resolveExecutable(home: home, environment: env)?.path
+                == real(custom.appendingPathComponent("node-versions/v26.1.0/installation/bin/pi-acp")))
+    }
+
+    @Test func systemFoldersCanBeReplacedForTests() throws {
+        let dir = try TemporaryDirectory(prefix: "acp-presets-system")
+        defer { dir.remove() }
+        let withSystem = ACPAgentPreset.claude.searchDirectories(home: dir.url, environment: ["PATH": ""])
+        #expect(withSystem.contains("/opt/homebrew/bin"))
+        let without = ACPAgentPreset.claude.searchDirectories(home: dir.url, environment: ["PATH": "", "BOBUK_ACP_SYSTEM_BINS": ""])
+        #expect(!without.contains("/opt/homebrew/bin") && !without.contains("/usr/bin"))
+        let custom = ACPAgentPreset.claude.searchDirectories(home: dir.url, environment: ["PATH": "", "BOBUK_ACP_SYSTEM_BINS": "/x/bin:relative"])
+        #expect(custom.last == "/x/bin")
     }
 }

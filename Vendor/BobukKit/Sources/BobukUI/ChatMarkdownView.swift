@@ -198,6 +198,8 @@ struct ChatMarkdownView: View, Equatable {
     let accent: Color
     let elevated: Color
     let line: Color
+    /// Multiplies every font size; see `ChatTextScale`.
+    var scale: CGFloat = 1
     @State private var copiedCodeIndex: Int?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -207,7 +209,10 @@ struct ChatMarkdownView: View, Equatable {
             && lhs.accent == rhs.accent
             && lhs.elevated == rhs.elevated
             && lhs.line == rhs.line
+            && lhs.scale == rhs.scale
     }
+
+    private func scaled(_ size: CGFloat) -> CGFloat { size * scale }
 
     private var blocks: [ChatMarkdownBlock] {
         ChatMarkdownBlock.parse(rawMarkdown)
@@ -226,13 +231,13 @@ struct ChatMarkdownView: View, Equatable {
         switch block {
         case let .heading(level, text):
             inlineText(text)
-                .font(.system(size: level == 1 ? 16 : (level == 2 ? 14.5 : 13.5), weight: .semibold))
+                .font(.system(size: scaled(level == 1 ? 16 : (level == 2 ? 14.5 : 13.5)), weight: .semibold))
                 .foregroundStyle(ink)
                 .padding(.top, level <= 2 ? 4 : 2)
 
         case let .paragraph(text):
             inlineText(text)
-                .font(.system(size: 13.5))
+                .font(.system(size: scaled(13.5)))
                 .lineSpacing(4)
                 .foregroundStyle(ink)
 
@@ -242,7 +247,7 @@ struct ChatMarkdownView: View, Equatable {
                     .fill(accent.opacity(0.6))
                     .frame(width: 2)
                 inlineText(text)
-                    .font(.system(size: 13))
+                    .font(.system(size: scaled(13)))
                     .lineSpacing(3.5)
                     .foregroundStyle(muted)
             }
@@ -251,10 +256,10 @@ struct ChatMarkdownView: View, Equatable {
         case let .bullet(text):
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("•")
-                    .font(.system(size: 13.5, weight: .semibold))
+                    .font(.system(size: scaled(13.5), weight: .semibold))
                     .foregroundStyle(muted)
                 inlineText(text)
-                    .font(.system(size: 13.5))
+                    .font(.system(size: scaled(13.5)))
                     .lineSpacing(3.5)
                     .foregroundStyle(ink)
             }
@@ -263,10 +268,10 @@ struct ChatMarkdownView: View, Equatable {
         case let .ordered(number, text):
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text("\(number).")
-                    .font(.system(size: 12.5, weight: .medium, design: .monospaced))
+                    .font(.system(size: scaled(12.5), weight: .medium, design: .monospaced))
                     .foregroundStyle(muted)
                 inlineText(text)
-                    .font(.system(size: 13.5))
+                    .font(.system(size: scaled(13.5)))
                     .lineSpacing(3.5)
                     .foregroundStyle(ink)
             }
@@ -277,7 +282,7 @@ struct ChatMarkdownView: View, Equatable {
                 HStack(spacing: 6) {
                     if let language {
                         Text(language.uppercased())
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .font(.system(size: scaled(10), weight: .medium, design: .monospaced))
                             .foregroundStyle(muted)
                     }
                     Spacer()
@@ -291,9 +296,9 @@ struct ChatMarkdownView: View, Equatable {
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: copiedCodeIndex == index ? "checkmark" : "doc.on.doc")
-                                .font(.system(size: 10))
+                                .font(.system(size: scaled(10)))
                             Text(copiedCodeIndex == index ? "Copied" : "Copy")
-                                .font(.system(size: 10.5, weight: .medium))
+                                .font(.system(size: scaled(10.5), weight: .medium))
                         }
                         .foregroundStyle(copiedCodeIndex == index ? accent : muted)
                     }
@@ -306,7 +311,7 @@ struct ChatMarkdownView: View, Equatable {
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     Text(code)
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(.system(size: scaled(12), design: .monospaced))
                         .lineSpacing(3.5)
                         .foregroundStyle(ink)
                         .padding(.horizontal, 10)
@@ -332,7 +337,7 @@ struct ChatMarkdownView: View, Equatable {
                     GridRow {
                         ForEach(Array(headers.enumerated()), id: \.offset) { _, header in
                             inlineText(header)
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.system(size: scaled(12), weight: .semibold))
                                 .foregroundStyle(ink)
                                 .padding(.vertical, 7)
                         }
@@ -342,7 +347,7 @@ struct ChatMarkdownView: View, Equatable {
                         GridRow {
                             ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
                                 inlineText(cell)
-                                    .font(.system(size: 12.5))
+                                    .font(.system(size: scaled(12.5)))
                                     .foregroundStyle(ink)
                                     .padding(.vertical, 6)
                             }

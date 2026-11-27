@@ -740,6 +740,8 @@ public struct AgentChatView: View {
     @Bindable private var session: AgentChatSession
     @FocusState private var composerFocused: Bool
     @State private var hostWindow = WindowReference()
+    @Environment(\.chatTextScale) private var textScale
+    @Environment(\.chatSendKey) private var sendKey
     @State private var copiedMessageID: UUID?
     @State private var hoveredMessageID: UUID?
     @State private var expandedActivityIDs: Set<UUID> = []
@@ -809,6 +811,23 @@ public struct AgentChatView: View {
         self.selectedAgent = selectedAgent
         self.workingDirectory = workingDirectory
         self.colors = ChatColors(palette: palette)
+    }
+
+    /// A kit font size at the text scale of `.chatTextScale(_:)`.
+    private func scaled(_ size: CGFloat) -> CGFloat { size * CGFloat(textScale) }
+
+    /// ↩ in the composer with `.chatSendKey(.return)`: sends unless ⇧ or ⌥ asks for a new line
+    /// or an input method is composing (then ↩ confirms the composition).
+    private func handleReturn(_ press: KeyPress) -> KeyPress.Result {
+        guard sendKey == .return, press.modifiers.isDisjoint(with: [.shift, .option, .command, .control]),
+              !KeyEquivalent.isComposing(in: hostWindow.window) else { return .ignored }
+        switch session.phase {
+        case .ready where session.canSend: session.send()
+        case .disconnected where session.hasDraftContent && selectedAgentMissingAdapter == nil: session.send()
+        default: break
+        }
+        // Even when nothing can be sent yet, ↩ must not add a line that ⇧↩ is for.
+        return .handled
     }
 
     private var isStreaming: Bool { session.phase == .replying || session.phase == .stopping }
@@ -945,19 +964,19 @@ public struct AgentChatView: View {
             Spacer(minLength: 20)
             VStack(spacing: 8) {
                 Image(systemName: "sparkles")
-                    .font(.system(size: 18, weight: .light))
+                    .font(.system(size: scaled(18), weight: .light))
                     .foregroundStyle(colors.accent)
                     .frame(width: 36, height: 36)
                     .background(colors.accentSurface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .accessibilityHidden(true)
 
                 Text(emptyTitle)
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: scaled(17), weight: .semibold))
                     .tracking(-0.3)
                     .accessibilityAddTraits(.isHeader)
 
                 Text(intro)
-                    .font(.system(size: 12.5))
+                    .font(.system(size: scaled(12.5)))
                     .foregroundStyle(colors.muted)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 320)
@@ -985,12 +1004,12 @@ public struct AgentChatView: View {
         } label: {
             HStack(spacing: 8) {
                 Text(text)
-                    .font(.system(size: 12.5))
+                    .font(.system(size: scaled(12.5)))
                     .foregroundStyle(colors.ink)
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 Image(systemName: "arrow.up.right")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(size: scaled(10), weight: .medium))
                     .foregroundStyle(colors.muted)
                     .accessibilityHidden(true)
             }
@@ -1057,7 +1076,7 @@ public struct AgentChatView: View {
                         }
                     } label: {
                         Image(systemName: "arrow.down")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(.system(size: scaled(11), weight: .semibold))
                             .foregroundStyle(colors.ink)
                             .frame(width: 28, height: 28)
                             .background(colors.elevated, in: Circle())
@@ -1092,9 +1111,9 @@ public struct AgentChatView: View {
                             ForEach(message.attachmentNames, id: \.self) { name in
                                 HStack(spacing: 4) {
                                     Image(systemName: "paperclip")
-                                        .font(.system(size: 10))
+                                        .font(.system(size: scaled(10)))
                                     Text(name)
-                                        .font(.system(size: 11))
+                                        .font(.system(size: scaled(11)))
                                         .lineLimit(1)
                                 }
                                 .foregroundStyle(colors.muted)
@@ -1105,7 +1124,7 @@ public struct AgentChatView: View {
                         }
                     }
                     Text(message.text)
-                        .font(.system(size: 13.5))
+                        .font(.system(size: scaled(13.5)))
                         .lineSpacing(3.5)
                         .foregroundStyle(colors.ink)
                         .textSelection(.enabled)
@@ -1146,7 +1165,7 @@ public struct AgentChatView: View {
 
             if message.text.isEmpty {
                 Text("…")
-                    .font(.system(size: 13.5))
+                    .font(.system(size: scaled(13.5)))
                     .foregroundStyle(colors.muted)
             } else {
                 ChatMarkdownView(
@@ -1155,7 +1174,8 @@ public struct AgentChatView: View {
                     muted: colors.muted,
                     accent: colors.accent,
                     elevated: colors.elevated,
-                    line: colors.line
+                    line: colors.line,
+                    scale: CGFloat(textScale)
                 )
                 .equatable()
             }
@@ -1177,9 +1197,9 @@ public struct AgentChatView: View {
                         Button { session.regenerate() } label: {
                             HStack(spacing: 4) {
                                 Image(systemName: "arrow.clockwise")
-                                    .font(.system(size: 9.5))
+                                    .font(.system(size: scaled(9.5)))
                                 Text("Regenerate")
-                                    .font(.system(size: 10.5, weight: .medium))
+                                    .font(.system(size: scaled(10.5), weight: .medium))
                             }
                             .foregroundStyle(colors.muted)
                             .padding(.horizontal, 7)
@@ -1223,9 +1243,9 @@ public struct AgentChatView: View {
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(.system(size: scaled(9), weight: .semibold))
                     Text(summary)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: scaled(11), weight: .medium))
                 }
                 .foregroundStyle(colors.muted)
                 .padding(.horizontal, 8)
@@ -1240,17 +1260,17 @@ public struct AgentChatView: View {
                         ForEach(Array(message.tools.enumerated()), id: \.offset) { _, tool in
                             HStack(spacing: 6) {
                                 Image(systemName: "wrench")
-                                    .font(.system(size: 10))
+                                    .font(.system(size: scaled(10)))
                                     .foregroundStyle(colors.accent)
                                 Text(tool)
-                                    .font(.system(size: 11.5, design: .monospaced))
+                                    .font(.system(size: scaled(11.5), design: .monospaced))
                                     .foregroundStyle(colors.muted)
                             }
                         }
                     }
                     if !message.thoughts.isEmpty {
                         Text(message.thoughts)
-                            .font(.system(size: 11.5))
+                            .font(.system(size: scaled(11.5)))
                             .lineSpacing(3)
                             .foregroundStyle(colors.muted)
                             .textSelection(.enabled)
@@ -1271,9 +1291,9 @@ public struct AgentChatView: View {
         Button { copyRawMarkdown(message) } label: {
             HStack(spacing: 4) {
                 Image(systemName: "doc.on.doc")
-                    .font(.system(size: 9.5))
+                    .font(.system(size: scaled(9.5)))
                 Text("Copy Markdown")
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(.system(size: scaled(10.5), weight: .medium))
             }
             .foregroundStyle(colors.muted)
             .padding(.horizontal, 7)
@@ -1286,9 +1306,9 @@ public struct AgentChatView: View {
     private var copiedPill: some View {
         HStack(spacing: 4) {
             Image(systemName: "checkmark")
-                .font(.system(size: 9.5, weight: .semibold))
+                .font(.system(size: scaled(9.5), weight: .semibold))
             Text("Copied Markdown")
-                .font(.system(size: 10.5, weight: .medium))
+                .font(.system(size: scaled(10.5), weight: .medium))
         }
         .foregroundStyle(colors.accent)
         .padding(.horizontal, 7)
@@ -1311,24 +1331,24 @@ public struct AgentChatView: View {
         return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: adapterInstallError == nil ? "puzzlepiece.extension.fill" : "exclamationmark.triangle.fill")
-                    .font(.system(size: 13))
+                    .font(.system(size: scaled(13)))
                     .foregroundStyle(adapterInstallError == nil ? colors.accent : colors.danger)
                     .padding(.top, 1)
                     .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("\(preset.name) CLI is installed, but needs its ACP adapter to chat here.")
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: scaled(12), weight: .medium))
                         .foregroundStyle(colors.ink)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(command)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(.system(size: scaled(11), design: .monospaced))
                         .foregroundStyle(colors.muted)
                         .textSelection(.enabled)
                         .lineLimit(2)
                     if let installError = adapterInstallError {
                         Text(installError)
-                            .font(.system(size: 11))
+                            .font(.system(size: scaled(11)))
                             .foregroundStyle(colors.danger)
                             .lineLimit(4)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1341,7 +1361,7 @@ public struct AgentChatView: View {
                 if isInstalling {
                     ProgressView().controlSize(.small)
                     Text("Installing ACP adapter…")
-                        .font(.system(size: 11.5))
+                        .font(.system(size: scaled(11.5)))
                         .foregroundStyle(colors.muted)
                 } else {
                     Button(adapterInstallError == nil ? "Install ACP Adapter" : "Retry Install") {
@@ -1383,18 +1403,18 @@ public struct AgentChatView: View {
         return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "wrench.and.screwdriver.fill")
-                    .font(.system(size: 13))
+                    .font(.system(size: scaled(13)))
                     .foregroundStyle(colors.accent)
                     .padding(.top, 1)
                     .accessibilityHidden(true)
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(heading)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: scaled(12), weight: .medium))
                         .foregroundStyle(colors.ink)
                         .fixedSize(horizontal: false, vertical: true)
                     Text("Tools are off by default in Chat mode. Allow built-in tools (such as web search) to run inside the sandbox?")
-                        .font(.system(size: 11.5))
+                        .font(.system(size: scaled(11.5)))
                         .foregroundStyle(colors.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1433,11 +1453,11 @@ public struct AgentChatView: View {
     private func recoveryBanner(_ message: String) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 13))
+                .font(.system(size: scaled(13)))
                 .foregroundStyle(colors.danger)
                 .accessibilityHidden(true)
             Text(message)
-                .font(.system(size: 12))
+                .font(.system(size: scaled(12)))
                 .foregroundStyle(colors.ink)
                 .lineLimit(6)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1470,17 +1490,17 @@ public struct AgentChatView: View {
                         ForEach(session.attachments) { item in
                             HStack(spacing: 5) {
                                 Image(systemName: item.isImage ? "photo" : "doc")
-                                    .font(.system(size: 10.5))
+                                    .font(.system(size: scaled(10.5)))
                                     .foregroundStyle(colors.accent)
                                 Text(item.name)
-                                    .font(.system(size: 11))
+                                    .font(.system(size: scaled(11)))
                                     .foregroundStyle(colors.ink)
                                     .lineLimit(1)
                                 Button {
                                     session.removeAttachment(id: item.id)
                                 } label: {
                                     Image(systemName: "xmark")
-                                        .font(.system(size: 8.5, weight: .semibold))
+                                        .font(.system(size: scaled(8.5), weight: .semibold))
                                         .foregroundStyle(colors.muted)
                                 }
                                 .buttonStyle(.plain)
@@ -1500,7 +1520,7 @@ public struct AgentChatView: View {
 
             TextField(isStreaming ? "Waiting for reply…" : placeholder, text: $session.draft, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13.5))
+                .font(.system(size: scaled(13.5)))
                 .lineLimit(1...5)
                 .focused($composerFocused)
                 .frame(maxWidth: .infinity, minHeight: 22, alignment: .topLeading)
@@ -1510,6 +1530,7 @@ public struct AgentChatView: View {
                 .onKeyPress(.downArrow) {
                     session.recallNextPrompt() ? .handled : .ignored
                 }
+                .onKeyPress(.return, phases: .down, action: handleReturn)
 
             HStack(spacing: 8) {
                 agentModelControl
@@ -1519,9 +1540,9 @@ public struct AgentChatView: View {
                 if let workingDirectory {
                     HStack(spacing: 4) {
                         Image(systemName: "folder")
-                            .font(.system(size: 10.5))
+                            .font(.system(size: scaled(10.5)))
                         Text(workingDirectory.lastPathComponent)
-                            .font(.system(size: 11))
+                            .font(.system(size: scaled(11)))
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
@@ -1590,7 +1611,7 @@ public struct AgentChatView: View {
             }
         } label: {
             Image(systemName: "paperclip")
-                .font(.system(size: 11.5, weight: .medium))
+                .font(.system(size: scaled(11.5), weight: .medium))
                 .foregroundStyle(colors.muted)
                 .frame(width: 24, height: 24)
         }
@@ -1711,7 +1732,7 @@ public struct AgentChatView: View {
                 .fill(statusDotColor)
                 .frame(width: 6, height: 6)
             Text(activeAgentName)
-                .font(.system(size: 11.5, weight: .medium))
+                .font(.system(size: scaled(11.5), weight: .medium))
                 .foregroundStyle(colors.ink)
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
@@ -1719,14 +1740,14 @@ public struct AgentChatView: View {
                 Text("·")
                     .foregroundStyle(colors.muted)
                 Text(subtitle)
-                    .font(.system(size: 11.5))
+                    .font(.system(size: scaled(11.5)))
                     .foregroundStyle(colors.muted)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
             if showChevron {
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 8.5, weight: .semibold))
+                    .font(.system(size: scaled(8.5), weight: .semibold))
                     .foregroundStyle(colors.muted)
             }
         }
@@ -1787,7 +1808,7 @@ public struct AgentChatView: View {
                     GlyphImage(.lock, size: 10.5)
                         .foregroundStyle(colors.muted)
                     Text("Sandbox")
-                        .font(.system(size: 11))
+                        .font(.system(size: scaled(11)))
                         .foregroundStyle(colors.muted)
                 }
                 .padding(.horizontal, 6)
@@ -1795,9 +1816,9 @@ public struct AgentChatView: View {
             } else {
                 HStack(spacing: 4) {
                     Image(systemName: "lock.open")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: scaled(10), weight: .semibold))
                     Text("No sandbox")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: scaled(11), weight: .medium))
                 }
                 .foregroundStyle(colors.danger)
                 .padding(.horizontal, 7)
@@ -1819,15 +1840,15 @@ public struct AgentChatView: View {
         switch session.phase {
         case .disconnected:
             if session.hasDraftContent, selectedAgentMissingAdapter == nil {
-                Text("⌘↩")
-                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                Text(sendKey.label)
+                    .font(.system(size: scaled(10.5), weight: .medium, design: .monospaced))
                     .foregroundStyle(colors.muted.opacity(0.85))
                 Button { session.send() } label: {
                     ZStack {
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
                             .fill(colors.accent)
                         Image(systemName: "arrow.up")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.system(size: scaled(12), weight: .semibold))
                             .foregroundStyle(colors.keyInk)
                     }
                     .frame(width: 26, height: 26)
@@ -1847,14 +1868,14 @@ public struct AgentChatView: View {
             ProgressView().controlSize(.small)
         case .replying, .stopping:
             Text("esc")
-                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                .font(.system(size: scaled(10.5), weight: .medium, design: .monospaced))
                 .foregroundStyle(colors.muted.opacity(0.85))
             Button { session.stop() } label: {
                 ZStack {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .fill(colors.danger)
                     Image(systemName: "stop.fill")
-                        .font(.system(size: 9.5, weight: .semibold))
+                        .font(.system(size: scaled(9.5), weight: .semibold))
                         .foregroundStyle(Color.white)
                 }
                 .frame(width: 26, height: 26)
@@ -1864,15 +1885,15 @@ public struct AgentChatView: View {
             .disabled(session.phase == .stopping)
             .accessibilityLabel("Stop generating")
         case .ready:
-            Text("⌘↩")
-                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+            Text(sendKey.label)
+                .font(.system(size: scaled(10.5), weight: .medium, design: .monospaced))
                 .foregroundStyle(colors.muted.opacity(0.85))
             Button { session.send() } label: {
                 ZStack {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .fill(session.canSend ? colors.accent : colors.elevated)
                     Image(systemName: "arrow.up")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: scaled(12), weight: .semibold))
                         .foregroundStyle(session.canSend ? colors.keyInk : colors.muted)
                 }
                 .frame(width: 26, height: 26)
